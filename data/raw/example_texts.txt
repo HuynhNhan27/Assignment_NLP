@@ -1,0 +1,16 @@
+Example educational texts for testing
+
+=== Example 1: Simple Food Chain ===
+Cows are herbivorous mammals that eat grass in meadows.
+They are larger than sheep, which also eat grass and leaves.
+Both cows and deer consume plant matter like grass and leaves as food.
+
+=== Example 2: Animal Classification ===
+A cat is a small carnivorous mammal with fur, whiskers, and four legs.
+Dogs are also mammals, domesticated for hunting and companionship.
+Birds like eagles are carnivorous animals that hunt smaller creatures.
+
+=== Example 3: Ecosystem ===
+In a forest ecosystem, trees provide shelter and food for animals.
+Rabbits eat clover and grass, while foxes hunt rabbits.
+Decomposers like fungi break down dead organic matter.

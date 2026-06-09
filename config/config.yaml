@@ -1,0 +1,23 @@
+# Project Configuration
+
+# Spacy Model
+SPACY_MODEL: "en_core_web_sm"
+
+# Sentence Transformers Model
+EMBEDDING_MODEL: "all-MiniLM-L6-v2"
+
+# Entity Normalization Thresholds
+FUZZY_THRESHOLD: 0.85
+EMBEDDING_THRESHOLD: 0.8
+
+# WSD Parameters
+WSD_DEPTH: 5
+MIN_CONFIDENCE: 0.5
+
+# Graph Parameters
+ENABLE_HIERARCHY_MERGE: true
+HIERARCHY_DEPTH: 3
+
+# Output
+OUTPUT_FORMAT: "json"
+OUTPUT_PATH: "data/output/knowledge_graph.json"

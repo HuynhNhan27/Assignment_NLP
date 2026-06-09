@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Graph Visualizations</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 1000px;
+            width: 100%;
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 40px;
+        }
+        
+        .visualizations {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+        
+        .card {
+            background: #f8f9fa;
+            border-radius: 15px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            border-left: 5px solid #667eea;
+        }
+        
+        .card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+        }
+        
+        .card-mindmap {
+            border-left-color: #3498db;
+        }
+        
+        .card-dag {
+            border-left-color: #e74c3c;
+        }
+        
+        .card-explorer {
+            border-left-color: #2ecc71;
+        }
+        
+        .card-icon {
+            font-size: 3em;
+            padding: 20px;
+            text-align: center;
+            background: white;
+        }
+        
+        .card-content {
+            padding: 20px;
+        }
+        
+        .card-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        
+        .card-description {
+            color: #666;
+            font-size: 0.95em;
+            line-height: 1.5;
+            margin-bottom: 15px;
+        }
+        
+        .card-link {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        
+        .card-link:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .features {
+            background: #f0f4ff;
+            padding: 30px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .features h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+        
+        .features ul {
+            list-style: none;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .features li {
+            display: flex;
+            align-items: center;
+        }
+        
+        .features li::before {
+            content: "✓";
+            color: #2ecc71;
+            font-weight: bold;
+            font-size: 1.2em;
+            margin-right: 10px;
+        }
+        
+        .instructions {
+            background: #fef5e7;
+            padding: 20px;
+            border-radius: 10px;
+            border-left: 4px solid #f39c12;
+            margin-top: 30px;
+        }
+        
+        .instructions h4 {
+            color: #e67e22;
+            margin-bottom: 10px;
+        }
+        
+        .instructions code {
+            background: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            color: #d35400;
+        }
+        
+        .footer {
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            font-size: 0.9em;
+            border-top: 1px solid #e0e0e0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧠 Knowledge Graph Visualizations</h1>
+            <p>Interactive exploration of your knowledge graph</p>
+        </div>
+        
+        <div class="content">
+            <div class="features">
+                <h3>📊 Available Visualizations</h3>
+                <ul>
+                    <li>Interactive Network Graph</li>
+                    <li>Hierarchical DAG Layout</li>
+                    <li>Graph Explorer</li>
+                    <li>Node & Edge Highlighting</li>
+                    <li>Zoom & Pan Controls</li>
+                    <li>Relationship Analysis</li>
+                </ul>
+            </div>
+            
+            <div class="visualizations">
+                <div class="card card-mindmap">
+                    <div class="card-icon">🕸️</div>
+                    <div class="card-content">
+                        <div class="card-title">Mind Map</div>
+                        <div class="card-description">
+                            Interactive network visualization using PyVis. Drag nodes, zoom, and explore relationships with full physics simulation.
+                        </div>
+                        <a href="mindmap.html" class="card-link">Open Mind Map →</a>
+                    </div>
+                </div>
+                
+                <div class="card card-dag">
+                    <div class="card-icon">📊</div>
+                    <div class="card-content">
+                        <div class="card-title">DAG Visualization</div>
+                        <div class="card-description">
+                            Hierarchical directed acyclic graph. Concepts at top, entities below. Perfect for understanding taxonomy and hierarchy.
+                        </div>
+                        <a href="dag.html" class="card-link">Open DAG →</a>
+                    </div>
+                </div>
+                
+                <div class="card card-explorer">
+                    <div class="card-icon">🔍</div>
+                    <div class="card-content">
+                        <div class="card-title">Graph Explorer</div>
+                        <div class="card-description">
+                            Search and explore nodes with full interactivity. Hover over nodes to see details and relationships.
+                        </div>
+                        <a href="explorer.html" class="card-link">Open Explorer →</a>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="instructions">
+                <h4>💡 How to Generate Visualizations</h4>
+                <p>
+                    First, generate the knowledge graph:
+                    <code>python main.py</code>
+                </p>
+                <p>
+                    Then, create visualizations:
+                    <code>python visualize.py</code>
+                </p>
+                <p>
+                    This will generate three interactive HTML files in <code>frontend/public/</code>
+                </p>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>📚 Text to Knowledge Graph Pipeline | Educational NLP Project</p>
+        </div>
+    </div>
+</body>
+</html>
