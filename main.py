@@ -35,11 +35,6 @@ class TextToKnowledgeGraphPipeline:
     def __init__(self):
         """Initialize all pipeline components."""
         print("[INIT] Initializing TextToKnowledgeGraphPipeline...")
-
-        # Stage 0: Preprocessing
-        print("Loading Co-reference Resolution model (FCoref)...")
-        self.preprocessor = spacy.load("en_core_web_sm")
-        self.preprocessor.add_pipe("fastcoref", config={"model_architecture": "FCoref", "device": "cpu"})
         
         # Stage 1: Information Extraction
         print("[INIT] Loading Information Extractor (spaCy)...")
@@ -59,11 +54,6 @@ class TextToKnowledgeGraphPipeline:
         # # Stage 4: Graph Construction
         # print("[INIT] Initializing Graph Constructor (NetworkX)...")
         # self.graph_constructor = GraphConstructor()
-
-    def preprocess(self, text: str) -> str:
-        preds = self.preprocessor(text, component_cfg={"fastcoref": {'resolve_text': True}})
-
-        return preds._.resolved_text
     
     def stage_1_information_extraction(self, text: str) -> Dict[str, Any]:
         """
@@ -291,10 +281,7 @@ class TextToKnowledgeGraphPipeline:
 
         print(f"Input text: {text[:100]}...")
 
-        # Tiền xử lý
-        text = self.preprocess(text)
-        print(f"After Preprocess: '{text[:100]}'")
-        
+        # Tiền xử lý trong IE
         # Execute all stages
         stage1_result = self.stage_1_information_extraction(text)
         # stage2_result = self.stage_2_wsd_and_normalization(stage1_result, text)
@@ -337,8 +324,11 @@ Cattle are large artiodactyls, mammals with cloven hooves, meaning that they wal
     """
 
     sample_test = """
-    John and Tom plays together.
+    Elon Musk, who is a billionaire, announced a new model.
     """
+
+    # Cows are herbivorous mammals that eat grass in meadows
+    # Elon Musk, who is a billionaire, announced a new model.
 
     # Initialize and run pipeline
     pipeline = TextToKnowledgeGraphPipeline()
