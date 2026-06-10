@@ -13,6 +13,7 @@ import sys
 import json
 import os
 from typing import Dict, Any, List
+import spacy
 
 # Import pipeline modules
 from src.modules import (
@@ -22,6 +23,7 @@ from src.modules import (
     OntologyResolver,
     GraphConstructor
 )
+from fastcoref import spacy_component
 from src.utils import save_json, load_json
 
 
@@ -33,25 +35,35 @@ class TextToKnowledgeGraphPipeline:
     def __init__(self):
         """Initialize all pipeline components."""
         print("[INIT] Initializing TextToKnowledgeGraphPipeline...")
+
+        # Stage 0: Preprocessing
+        print("Loading Co-reference Resolution model (FCoref)...")
+        self.preprocessor = spacy.load("en_core_web_sm")
+        self.preprocessor.add_pipe("fastcoref", config={"model_architecture": "FCoref", "device": "cpu"})
         
         # Stage 1: Information Extraction
         print("[INIT] Loading Information Extractor (spaCy)...")
         self.ie_extractor = InformationExtractor(model_name="en_core_web_sm")
         
-        # Stage 2: WSD & Normalization
-        print("[INIT] Loading Word Sense Disambiguator (sentence-transformers)...")
-        self.wsd = WordSenseDisambiguator()
+        # # Stage 2: WSD & Normalization
+        # print("[INIT] Loading Word Sense Disambiguator (sentence-transformers)...")
+        # self.wsd = WordSenseDisambiguator()
         
-        print("[INIT] Loading Entity Normalizer (fuzzy + embeddings)...")
-        self.entity_normalizer = EntityNormalizer()
+        # print("[INIT] Loading Entity Normalizer (fuzzy + embeddings)...")
+        # self.entity_normalizer = EntityNormalizer()
         
-        # Stage 3: Ontology & Hierarchy
-        print("[INIT] Loading Ontology Resolver (WordNet)...")
-        self.ontology = OntologyResolver()
+        # # Stage 3: Ontology & Hierarchy
+        # print("[INIT] Loading Ontology Resolver (WordNet)...")
+        # self.ontology = OntologyResolver()
         
-        # Stage 4: Graph Construction
-        print("[INIT] Initializing Graph Constructor (NetworkX)...")
-        self.graph_constructor = GraphConstructor()
+        # # Stage 4: Graph Construction
+        # print("[INIT] Initializing Graph Constructor (NetworkX)...")
+        # self.graph_constructor = GraphConstructor()
+
+    def preprocess(self, text: str) -> str:
+        preds = self.preprocessor(text, component_cfg={"fastcoref": {'resolve_text': True}})
+
+        return preds._.resolved_text
     
     def stage_1_information_extraction(self, text: str) -> Dict[str, Any]:
         """
@@ -64,16 +76,15 @@ class TextToKnowledgeGraphPipeline:
             Dictionary with extracted information
         """
         print("\n[STAGE 1] Information Extraction")
-        print(f"Input text: {text[:100]}...")
         
         extraction_result = self.ie_extractor.process_text(text)
         
         print(f"  - Entities found: {len(extraction_result['entities'])}")
-        for entity in extraction_result['entities'][:3]:
+        for entity in extraction_result['entities'][:]:
             print(f"    * {entity['text']} ({entity['label']}) -> head: {entity['head_noun']}")
         
         print(f"  - Relations found: {len(extraction_result['relations'])}")
-        for rel in extraction_result['relations'][:3]:
+        for rel in extraction_result['relations'][:]:
             print(f"    * {rel['subject']} --[{rel['predicate']}]--> {rel['obj']}")
         
         return extraction_result
@@ -277,13 +288,19 @@ class TextToKnowledgeGraphPipeline:
         print("=" * 80)
         print("TEXT TO KNOWLEDGE GRAPH PIPELINE")
         print("=" * 80)
+
+        print(f"Input text: {text[:100]}...")
+
+        # Tiền xử lý
+        text = self.preprocess(text)
+        print(f"After Preprocess: '{text[:100]}'")
         
         # Execute all stages
         stage1_result = self.stage_1_information_extraction(text)
-        stage2_result = self.stage_2_wsd_and_normalization(stage1_result, text)
-        stage3_result = self.stage_3_ontology_resolution(stage1_result, stage2_result)
-        graph = self.stage_4_graph_construction(stage1_result, stage2_result, stage3_result)
-        self.stage_5_export(graph, output_path)
+        # stage2_result = self.stage_2_wsd_and_normalization(stage1_result, text)
+        # stage3_result = self.stage_3_ontology_resolution(stage1_result, stage2_result)
+        # graph = self.stage_4_graph_construction(stage1_result, stage2_result, stage3_result)
+        # self.stage_5_export(graph, output_path)
         
         print("\n" + "=" * 80)
         print("PIPELINE COMPLETE")
@@ -300,9 +317,29 @@ def main():
     Farmers raise cattle such as cows for meat and milk production.
     """
 
+    sample_1 = """
+    Cows are mammals.
+    Cow eat grass and leaves.
+    Farmers raise cow.
+    Cows produce milk.
+    """
+
     sample_2 = """
 Cattle are large artiodactyls, mammals with cloven hooves, meaning that they walk on two toes, the third and fourth digits. Like all bovid species, they can have horns, which are unbranched and are not shed annually.    """
     
+    sample_3 = """
+    The United States relies on good data.
+    The brown cow eats green grass and leaves the farm.
+    The cow and sheep eat grass and leaf.
+    The green grass is eaten by the brown cow.
+    John does not give up the difficult project.
+    The cat chases the mouse. It runs quickly.
+    """
+
+    sample_test = """
+    John and Tom plays together.
+    """
+
     # Initialize and run pipeline
     pipeline = TextToKnowledgeGraphPipeline()
     
@@ -310,7 +347,7 @@ Cattle are large artiodactyls, mammals with cloven hooves, meaning that they wal
     os.makedirs("data/output", exist_ok=True)
     
     # Run the pipeline
-    pipeline.run(sample_2.strip())
+    pipeline.run(sample_test.strip())
 
 
 if __name__ == "__main__":
