@@ -23,7 +23,7 @@ class Entity:
     start_char: int
     end_char: int
     head_noun: str
-    lemma: str
+    lemma: str # Tạm thời để full lowercase, chưa xét đến tên riêng
     modifiers: List[str]
     confidence: float
 
@@ -69,12 +69,13 @@ class InformationExtractor:
 
         return resolved_text
     
-    def _resolve_relative_clauses(self, doc, entities: List[Entity]) -> List[Relation]:
+    def _resolve_relative_clauses(self, doc, entities: List[Entity]) -> List[str]:
         """
-        Với mỗi relative clause, tìm entity khớp với antecedent làm subject,
-        sau đó extract relation trực tiếp từ clause verb + object.
+        Với mỗi relative clause, tạo câu mới dạng:
+        "<entity.text> <clause_verb_subtree>."
+        Subject được lookup từ entities_1 thay vì dùng antecedent.text trực tiếp.
         """
-        relations = []
+        generated = []
         entity_by_lemma = {e.lemma: e for e in entities}
 
         for token in doc:
@@ -83,15 +84,15 @@ class InformationExtractor:
 
             antecedent = token.head
 
-            # Lookup entity khớp với antecedent (ưu tiên lemma, fallback head_noun)
-            subj_ent = entity_by_lemma.get(antecedent.lemma_)
+            # Lookup entity khớp antecedent
+            subj_ent = entity_by_lemma.get(antecedent.lemma_.lower())
             if subj_ent is None:
                 subj_ent = next(
-                    (e for e in entities if e.head_noun.lower() == antecedent.lemma_),
+                    (e for e in entities if e.head_noun.lower() == antecedent.lemma_.lower()),
                     None
                 )
             if subj_ent is None:
-                continue  # Không tìm được entity → bỏ qua, không tạo relation rác
+                continue
 
             rel_pron = next(
                 (c for c in token.children if c.lower_ in {"which", "that", "who", "whom"}),
@@ -100,51 +101,25 @@ class InformationExtractor:
             if rel_pron is None:
                 continue
 
-            # token là verb của relative clause
-            verb = token
-            objects, prep_lemma = self._get_objects(verb)
+            # Lấy subtree của clause, bỏ relative pronoun
+            subtree_tokens = [
+                t for t in sorted(token.subtree, key=lambda t: t.i)
+                if t != rel_pron
+            ]
+            clause = " ".join(t.text for t in subtree_tokens)
 
-            predicate_parts = []
-            neg = next((c for c in verb.children if c.dep_ == "neg"), None)
-            if neg:
-                predicate_parts.append(neg.lemma_.lower())
-            predicate_parts.append(verb.lemma_.lower())
-            prt = next((c for c in verb.children if c.dep_ == "prt"), None)
-            if prt:
-                predicate_parts.append(prt.lemma_.lower())
-            if prep_lemma:
-                predicate_parts.append(prep_lemma.lower())
-            predicate_text = " ".join(predicate_parts)
+            # Dùng entity.text thay vì antecedent.text
+            generated.append(f"{subj_ent.text} {clause}.")
 
-            entity_by_lemma_obj = {e.lemma: e for e in entities}
-            for obj_token in objects:
-                obj_ent = entity_by_lemma_obj.get(obj_token.lemma_)
-                if obj_ent is None:
-                    obj_ent = next(
-                        (e for e in entities if e.head_noun.lower() == obj_token.lemma_),
-                        None
-                    )
-                if obj_ent is None:
-                    continue
-                if subj_ent.lemma == obj_ent.lemma:
-                    continue
-
-                relations.append(Relation(
-                    subject=subj_ent.lemma,
-                    predicate=predicate_text,
-                    obj=obj_ent.lemma,
-                    source_sentence=doc.text,
-                    confidence=0.80
-                ))
-
-        return relations
+        return generated
     
-    def _resolve_appositions(self, doc, entities: List[Entity]) -> List[Relation]:
+    def _resolve_appositions(self, doc, entities: List[Entity]) -> List[str]:
         """
-        Với mỗi apposition, tạo relation IS_A giữa entity head và entity appos
-        nếu cả hai đều tồn tại trong entity list.
+        Với mỗi apposition, tạo câu mới dạng:
+        "<head_ent.text> is <appos_ent.text>."
+        Cả head và appos đều được lookup từ entities_1.
         """
-        relations = []
+        generated = []
         entity_by_lemma = {e.lemma: e for e in entities}
 
         for token in doc:
@@ -154,20 +129,20 @@ class InformationExtractor:
             head = token.head
 
             # Lookup entity cho head
-            head_ent = entity_by_lemma.get(head.lemma_)
+            head_ent = entity_by_lemma.get(head.lemma_.lower())
             if head_ent is None:
                 head_ent = next(
-                    (e for e in entities if e.head_noun.lower() == head.lemma_),
+                    (e for e in entities if e.head_noun.lower() == head.lemma_.lower()),
                     None
                 )
             if head_ent is None:
                 continue
 
             # Lookup entity cho apposition
-            appos_ent = entity_by_lemma.get(token.lemma_)
+            appos_ent = entity_by_lemma.get(token.lemma_.lower())
             if appos_ent is None:
                 appos_ent = next(
-                    (e for e in entities if e.head_noun.lower() == token.lemma_),
+                    (e for e in entities if e.head_noun.lower() == token.lemma_.lower()),
                     None
                 )
             if appos_ent is None:
@@ -176,22 +151,16 @@ class InformationExtractor:
             if head_ent.lemma == appos_ent.lemma:
                 continue
 
-            relations.append(Relation(
-                subject=head_ent.lemma,
-                predicate="is",
-                obj=appos_ent.lemma,
-                source_sentence=doc.text,
-                confidence=0.85
-            ))
+            generated.append(f"{head_ent.text} is {appos_ent.text}.")
 
-        return relations
+        return generated
 
     def extract_entities(self, text: str) -> List[Entity]:
         """
         Trích xuất thực thể ưu tiên Named Entities (NER) trước,
         sau đó dùng Noun Chunks để bổ sung các danh từ chung chưa được nhận diện.
         """
-        print(text)
+        # print(f"Entities Extract text:\n{text}")
         doc = self.nlp(text)
         entities = []
         
@@ -263,12 +232,12 @@ class InformationExtractor:
         return entities
         
     
-    def extract_relations(self, text: str, doc, entities: List[Entity]) -> List[Relation]:
+    def extract_relations(self, text: str, entities: List[Entity]) -> List[Relation]:
         """
         Trích xuất quan hệ DỰA TRÊN danh sách thực thể đã chốt (Entity-driven).
         Chỉ tạo quan hệ nếu Subject và Object khớp với các Entity hợp lệ.
         """
-        # doc = self.nlp(text)
+        doc = self.nlp(text)
         relations = []
         
         # 1. BẢN ĐỒ THỰC THỂ (Entity Mapping)
@@ -356,7 +325,7 @@ class InformationExtractor:
                             )
                         )
 
-            elif token.lemma_ == "be":
+            elif token.lemma_.lower() == "be":
                 subjects = self._get_subjects(token)
 
                 attrs = [
@@ -427,7 +396,7 @@ class InformationExtractor:
                     if pobj.dep_ == "pobj":
                         objects.append(pobj)
                         if child.dep_ == "prep":
-                            prep_lemma = child.lemma_  # Lưu lại giới từ thông thường (không phải bị động)
+                            prep_lemma = child.lemma_.lower()  # Lưu lại giới từ thông thường (không phải bị động)
                         # Tân ngữ giới từ nối bằng "and"
                         for grandchild in pobj.children:
                             if grandchild.dep_ == "conj":
@@ -496,19 +465,24 @@ class InformationExtractor:
             Dictionary containing extracted entities, relations, and chunks
         """
         coref_text = self.preprocess(text)
-        entities = self.extract_entities(coref_text)
+        entities_1 = self.extract_entities(coref_text)
 
         doc = self.nlp(coref_text)
 
-        relations = []
-        relations.extend(self.extract_relations(coref_text, doc, entities))
-        relations.extend(self._resolve_relative_clauses(doc, entities))
-        relations.extend(self._resolve_appositions(doc, entities))
+        new_sentences = []
+        new_sentences.extend(self._resolve_relative_clauses(doc, entities_1))
+        new_sentences.extend(self._resolve_appositions(doc, entities_1))
 
-        unique_relations = {(r.subject, r.predicate, r.obj): r for r in relations}
+        full_text = coref_text
+        if new_sentences:
+            full_text += " " + " ".join(new_sentences)
+        print(f"Here is full text:\n{full_text}")
+
+        entities_2 = self.extract_entities(full_text)
+        relations = self.extract_relations(full_text, entities_2)
         
         return {
             "text": coref_text,
-            "entities": [asdict(e) for e in entities],
-            "relations": [asdict(r) for r in unique_relations.values()],
+            "entities": [asdict(e) for e in entities_2],
+            "relations": [asdict(r) for r in relations],
         }
