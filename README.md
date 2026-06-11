@@ -109,6 +109,13 @@ This will:
 4. Construct the knowledge graph
 5. Export to JSON at `data/output/knowledge_graph.json`
 
+```bash
+python visualize.py
+cd frontend/public && python -m http.server 8000
+```
+
+This will create html file for visualize and local host html on browser.
+
 ### Example Output
 
 Input text:

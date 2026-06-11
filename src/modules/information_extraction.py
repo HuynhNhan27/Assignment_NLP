@@ -23,7 +23,7 @@ class Entity:
     start_char: int
     end_char: int
     head_noun: str
-    lemma: str
+    lemma: str # Tạm thời để full lowercase, chưa xét đến tên riêng
     modifiers: List[str]
     confidence: float
 
@@ -58,16 +58,109 @@ class InformationExtractor:
         """
         try:
             self.nlp = spacy.load(model_name)
+            self.preprocessor = spacy.load(model_name)
+            self.preprocessor.add_pipe("fastcoref", config={"model_architecture": "FCoref", "device": "cpu"})
         except OSError:
             print(f"Model {model_name} not found. Please run: python -m spacy download {model_name}")
             raise
+
+    def preprocess(self, text: str) -> str:
+        resolved_text = self.preprocessor(text, component_cfg={"fastcoref": {"resolve_text": True}})._.resolved_text
+
+        return resolved_text
+    
+    def _resolve_relative_clauses(self, doc, entities: List[Entity]) -> List[str]:
+        """
+        Với mỗi relative clause, tạo câu mới dạng:
+        "<entity.text> <clause_verb_subtree>."
+        Subject được lookup từ entities_1 thay vì dùng antecedent.text trực tiếp.
+        """
+        generated = []
+        entity_by_lemma = {e.lemma: e for e in entities}
+
+        for token in doc:
+            if token.dep_ != "relcl":
+                continue
+
+            antecedent = token.head
+
+            # Lookup entity khớp antecedent
+            subj_ent = entity_by_lemma.get(antecedent.lemma_.lower())
+            if subj_ent is None:
+                subj_ent = next(
+                    (e for e in entities if e.head_noun.lower() == antecedent.lemma_.lower()),
+                    None
+                )
+            if subj_ent is None:
+                continue
+
+            rel_pron = next(
+                (c for c in token.children if c.lower_ in {"which", "that", "who", "whom"}),
+                None
+            )
+            if rel_pron is None:
+                continue
+
+            # Lấy subtree của clause, bỏ relative pronoun
+            subtree_tokens = [
+                t for t in sorted(token.subtree, key=lambda t: t.i)
+                if t != rel_pron
+            ]
+            clause = " ".join(t.text for t in subtree_tokens)
+
+            # Dùng entity.text thay vì antecedent.text
+            generated.append(f"{subj_ent.text} {clause}.")
+
+        return generated
+    
+    def _resolve_appositions(self, doc, entities: List[Entity]) -> List[str]:
+        """
+        Với mỗi apposition, tạo câu mới dạng:
+        "<head_ent.text> is <appos_ent.text>."
+        Cả head và appos đều được lookup từ entities_1.
+        """
+        generated = []
+        entity_by_lemma = {e.lemma: e for e in entities}
+
+        for token in doc:
+            if token.dep_ != "appos":
+                continue
+
+            head = token.head
+
+            # Lookup entity cho head
+            head_ent = entity_by_lemma.get(head.lemma_.lower())
+            if head_ent is None:
+                head_ent = next(
+                    (e for e in entities if e.head_noun.lower() == head.lemma_.lower()),
+                    None
+                )
+            if head_ent is None:
+                continue
+
+            # Lookup entity cho apposition
+            appos_ent = entity_by_lemma.get(token.lemma_.lower())
+            if appos_ent is None:
+                appos_ent = next(
+                    (e for e in entities if e.head_noun.lower() == token.lemma_.lower()),
+                    None
+                )
+            if appos_ent is None:
+                continue
+
+            if head_ent.lemma == appos_ent.lemma:
+                continue
+
+            generated.append(f"{head_ent.text} is {appos_ent.text}.")
+
+        return generated
 
     def extract_entities(self, text: str) -> List[Entity]:
         """
         Trích xuất thực thể ưu tiên Named Entities (NER) trước,
         sau đó dùng Noun Chunks để bổ sung các danh từ chung chưa được nhận diện.
         """
-        print(text)
+        # print(f"Entities Extract text:\n{text}")
         doc = self.nlp(text)
         entities = []
         
@@ -127,6 +220,15 @@ class InformationExtractor:
             # Đánh dấu các token của chunk này
             seen_token_indices.update(range(chunk.start, chunk.end))
             
+        # # Lấy confidence cao hơn nếu chung lemma (lấy NER)
+        # seen_lemmas: Dict[str, Entity] = {}
+        # for ent in entities:
+        #     existing = seen_lemmas.get(ent.lemma)
+        #     if existing is None or ent.confidence > existing.confidence:
+        #         seen_lemmas[ent.lemma] = ent
+
+        # return list(seen_lemmas.values())
+    
         return entities
         
     
@@ -177,6 +279,9 @@ class InformationExtractor:
                 
                 # Bước C: Kiểm tra câu Bị động (Passive Voice)
                 is_passive = any(c.dep_ == "nsubjpass" for c in token.children)
+
+                # Bước D: Kiểm tra adverb modifier
+                advmods = [c for c in token.children if c.dep_ == "advmod"]
                 
                 # Bước D: Lọc và kết nối các Thực Thể
                 for subj_token in subjects:
@@ -208,6 +313,42 @@ class InformationExtractor:
                             source_sentence=text,
                             confidence=0.85
                         ))
+
+                    for adv in advmods:
+                        relations.append(
+                            Relation(
+                                subject=subj_ent.lemma,
+                                predicate=f"{token.lemma_.lower()}_manner",
+                                obj=adv.lemma_.lower(),
+                                source_sentence=text,
+                                confidence=0.75
+                            )
+                        )
+
+            elif token.lemma_.lower() == "be":
+                subjects = self._get_subjects(token)
+
+                attrs = [
+                    c for c in token.children
+                    if c.dep_ in ("acomp", "attr", "oprd")
+                ]
+
+                for subj_token in subjects:
+                    subj_ent = token_to_entity.get(subj_token.i)
+
+                    if not subj_ent:
+                        continue
+
+                    for attr in attrs:
+                        relations.append(
+                            Relation(
+                                subject=subj_ent.lemma,
+                                predicate="has_attribute",
+                                obj=attr.lemma_.lower(),
+                                source_sentence=text,
+                                confidence=0.80
+                            )
+                        )
                         
         # Lọc trùng lặp
         unique_relations = { (r.subject, r.predicate, r.obj): r for r in relations }
@@ -255,7 +396,7 @@ class InformationExtractor:
                     if pobj.dep_ == "pobj":
                         objects.append(pobj)
                         if child.dep_ == "prep":
-                            prep_lemma = child.lemma_  # Lưu lại giới từ thông thường (không phải bị động)
+                            prep_lemma = child.lemma_.lower()  # Lưu lại giới từ thông thường (không phải bị động)
                         # Tân ngữ giới từ nối bằng "and"
                         for grandchild in pobj.children:
                             if grandchild.dep_ == "conj":
@@ -279,36 +420,6 @@ class InformationExtractor:
             if chunk.start <= token.i < chunk.end:
                 return chunk.text
         return token.text
-    
-    def extract_noun_chunks(self, text: str) -> List[Dict[str, Any]]:
-        """
-        Extract noun chunks with head noun and modifiers.
-        
-        Example: "large African elephants" 
-        -> head: "elephants", modifiers: ["large", "African"]
-        
-        Args:
-            text: Input text
-            
-        Returns:
-            List of dicts with chunk text, head noun, and modifiers
-        """
-        doc = self.nlp(text)
-        chunks = []
-        
-        for chunk in doc.noun_chunks:
-            head_noun = self._extract_head_noun(chunk)
-            modifiers = self._extract_modifiers(chunk)
-            
-            chunks.append({
-                "text": chunk.text,
-                "head_noun": head_noun,
-                "modifiers": modifiers,
-                "start": chunk.start_char,
-                "end": chunk.end_char
-            })
-        
-        return chunks
     
     def _extract_head_noun(self, span) -> str:
         """
@@ -353,13 +464,25 @@ class InformationExtractor:
         Returns:
             Dictionary containing extracted entities, relations, and chunks
         """
-        entities = self.extract_entities(text)
-        relations = self.extract_relations(text, entities)
-        # chunks = self.extract_noun_chunks(text)
+        coref_text = self.preprocess(text)
+        entities_1 = self.extract_entities(coref_text)
+
+        doc = self.nlp(coref_text)
+
+        new_sentences = []
+        new_sentences.extend(self._resolve_relative_clauses(doc, entities_1))
+        new_sentences.extend(self._resolve_appositions(doc, entities_1))
+
+        full_text = coref_text
+        if new_sentences:
+            full_text += " " + " ".join(new_sentences)
+        print(f"Here is full text:\n{full_text}")
+
+        entities_2 = self.extract_entities(full_text)
+        relations = self.extract_relations(full_text, entities_2)
         
         return {
-            "text": text,
-            "entities": [asdict(e) for e in entities],
+            "text": coref_text,
+            "entities": [asdict(e) for e in entities_2],
             "relations": [asdict(r) for r in relations],
-            # "noun_chunks": chunks
         }
