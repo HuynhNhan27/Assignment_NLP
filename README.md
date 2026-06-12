@@ -32,6 +32,35 @@ A sophisticated NLP pipeline that converts educational texts into a Labeled Prop
 - Node and link structure for interactive exploration
 - Extensible for future QA and graph interaction features
 
+## Setup Instructions
+
+### Prerequisites
+- Python 3.10+
+- Virtual environment (recommended)
+
+### Installation
+
+1. **Create and activate a virtual environment:**
+   ```bash
+   python3.10 -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+   This will automatically install:
+   - Core NLP libraries (spaCy 3.7.2, NLTK 3.8.1, spacy en_core_web_sm model)
+   - ML libraries (PyTorch, scikit-learn, transformers)
+   - Graph processing (NetworkX)
+   - Visualization (Plotly, PyVis, Matplotlib)
+
+3. **Verify installation:**
+   ```bash
+   python -c "import spacy; import nltk; print('✓ Setup complete')"
+   ```
+
 ## Project Structure
 
 ```
