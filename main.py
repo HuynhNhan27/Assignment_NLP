@@ -68,19 +68,30 @@ class TextToKnowledgeGraphPipeline:
         print("\n[STAGE 1] Information Extraction")
         
         extraction_result = self.ie_extractor.process_text(text)
+
+        entity_map = {
+            ent['canonical_id']: ent['text']
+            for ent in extraction_result['entities']
+        }
         
         print(f"  - Entities found: {len(extraction_result['entities'])}")
         for entity in extraction_result['entities'][:]:
             print(f"    * {entity['text']} ({entity['label']}) -> head: {entity['head_noun']}")
-        
+            print(f"      head_noun: {entity['head_noun']}")
+            print(f"      modifiers: {entity['modifiers']}")
+            print(f"      id: {entity['canonical_id']}")
+
         print(f"  - Relations found: {len(extraction_result['relations'])}")
-        for rel in extraction_result['relations'][:]:
-            print(f"    * {rel['subject']} --[{rel['predicate']}]--> {rel['obj']}")
+        for rel in extraction_result['relations']:
+            subject_text = entity_map.get(rel['subject'], rel['subject'])
+            object_text = entity_map.get(rel['obj'], rel['obj'])
+
+            print(f"    * {subject_text} --[{rel['predicate']}]--> {object_text}")
+            print(f"(ID relation:   * {rel['subject']} --[{rel['predicate']}]--> {rel['obj']})")
         
         return extraction_result
     
-    def stage_2_wsd_and_normalization(self, extraction_result: Dict[str, Any], 
-                                      text: str) -> Dict[str, Any]:
+    def stage_2_wsd_and_normalization(self, extraction_result: Dict[str, Any]) -> Dict[str, Any]:
         """
         Stage 2: Disambiguate word senses and normalize entities.
         
@@ -92,6 +103,7 @@ class TextToKnowledgeGraphPipeline:
             Dictionary with normalized entities and synsets
         """
         print("\n[STAGE 2] Word Sense Disambiguation & Normalization")
+        text = extraction_result['text']
         
         # Extract unique entities
         entities = [e['text'] for e in extraction_result['entities']]
@@ -105,6 +117,7 @@ class TextToKnowledgeGraphPipeline:
         # Disambiguate (example on first few entities)
         disambiguated = []
         for entity_text in list(set(entities))[:3]:
+            # print(f"[Disambiguated] entity_text: {entity_text}")
             result = self.wsd.disambiguate(entity_text, text)
             if result:
                 disambiguated.append({
@@ -284,7 +297,7 @@ class TextToKnowledgeGraphPipeline:
         # Tiền xử lý trong IE
         # Execute all stages
         stage1_result = self.stage_1_information_extraction(text)
-        # stage2_result = self.stage_2_wsd_and_normalization(stage1_result, text)
+        # stage2_result = self.stage_2_wsd_and_normalization(stage1_result)
         # stage3_result = self.stage_3_ontology_resolution(stage1_result, stage2_result)
         # graph = self.stage_4_graph_construction(stage1_result, stage2_result, stage3_result)
         # self.stage_5_export(graph, output_path)
@@ -312,7 +325,7 @@ def main():
     """
 
     sample_2 = """
-Cattle are large artiodactyls, mammals with cloven hooves, meaning that they walk on two toes, the third and fourth digits. Like all bovid species, they can have horns, which are unbranched and are not shed annually.    """
+Cattle are large artiodactyls, mammals with cloven hooves, meaning that they walk on two toes, the third and fourth digits. Like all bovid species, they can have horns, which are unbranched and are not shed annually."""
     
     sample_3 = """
     The United States relies on good data.
@@ -324,11 +337,13 @@ Cattle are large artiodactyls, mammals with cloven hooves, meaning that they wal
     """
 
     sample_test = """
-    Elon Musk, who is a billionaire, announced a new model.
+    Cows are herbivorous mammals that eat grass in meadows
     """
 
     # Cows are herbivorous mammals that eat grass in meadows
     # Elon Musk, who is a billionaire, announced a new model.
+    # Two young, talented artists painted a wooden picture frame in the studio.
+    # Two không nhận diện được, and và ',' ra kết quả khác nhau.
 
     # Initialize and run pipeline
     pipeline = TextToKnowledgeGraphPipeline()

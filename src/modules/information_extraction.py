@@ -10,6 +10,7 @@ Handles:
 Tool: spaCy (en_core_web_sm)
 """
 
+import uuid
 import spacy
 from typing import List, Dict, Tuple, Any
 from dataclasses import dataclass, asdict
@@ -26,7 +27,7 @@ class Entity:
     lemma: str # Tạm thời để full lowercase, chưa xét đến tên riêng
     modifiers: List[str]
     confidence: float
-
+    canonical_id: str = None  # ID định danh duy nhất cho KG
 
 @dataclass
 class Relation:
@@ -65,103 +66,16 @@ class InformationExtractor:
             raise
 
     def preprocess(self, text: str) -> str:
-        resolved_text = self.preprocessor(text, component_cfg={"fastcoref": {"resolve_text": True}})._.resolved_text
+        doc = self.preprocessor(text, component_cfg={"fastcoref": {"resolve_text": True}})
+        return doc
 
-        return resolved_text
-    
-    def _resolve_relative_clauses(self, doc, entities: List[Entity]) -> List[str]:
-        """
-        Với mỗi relative clause, tạo câu mới dạng:
-        "<entity.text> <clause_verb_subtree>."
-        Subject được lookup từ entities_1 thay vì dùng antecedent.text trực tiếp.
-        """
-        generated = []
-        entity_by_lemma = {e.lemma: e for e in entities}
-
-        for token in doc:
-            if token.dep_ != "relcl":
-                continue
-
-            antecedent = token.head
-
-            # Lookup entity khớp antecedent
-            subj_ent = entity_by_lemma.get(antecedent.lemma_.lower())
-            if subj_ent is None:
-                subj_ent = next(
-                    (e for e in entities if e.head_noun.lower() == antecedent.lemma_.lower()),
-                    None
-                )
-            if subj_ent is None:
-                continue
-
-            rel_pron = next(
-                (c for c in token.children if c.lower_ in {"which", "that", "who", "whom"}),
-                None
-            )
-            if rel_pron is None:
-                continue
-
-            # Lấy subtree của clause, bỏ relative pronoun
-            subtree_tokens = [
-                t for t in sorted(token.subtree, key=lambda t: t.i)
-                if t != rel_pron
-            ]
-            clause = " ".join(t.text for t in subtree_tokens)
-
-            # Dùng entity.text thay vì antecedent.text
-            generated.append(f"{subj_ent.text} {clause}.")
-
-        return generated
-    
-    def _resolve_appositions(self, doc, entities: List[Entity]) -> List[str]:
-        """
-        Với mỗi apposition, tạo câu mới dạng:
-        "<head_ent.text> is <appos_ent.text>."
-        Cả head và appos đều được lookup từ entities_1.
-        """
-        generated = []
-        entity_by_lemma = {e.lemma: e for e in entities}
-
-        for token in doc:
-            if token.dep_ != "appos":
-                continue
-
-            head = token.head
-
-            # Lookup entity cho head
-            head_ent = entity_by_lemma.get(head.lemma_.lower())
-            if head_ent is None:
-                head_ent = next(
-                    (e for e in entities if e.head_noun.lower() == head.lemma_.lower()),
-                    None
-                )
-            if head_ent is None:
-                continue
-
-            # Lookup entity cho apposition
-            appos_ent = entity_by_lemma.get(token.lemma_.lower())
-            if appos_ent is None:
-                appos_ent = next(
-                    (e for e in entities if e.head_noun.lower() == token.lemma_.lower()),
-                    None
-                )
-            if appos_ent is None:
-                continue
-
-            if head_ent.lemma == appos_ent.lemma:
-                continue
-
-            generated.append(f"{head_ent.text} is {appos_ent.text}.")
-
-        return generated
-
-    def extract_entities(self, text: str) -> List[Entity]:
+    def extract_base_entities(self, text: str, doc) -> List[Entity]:
         """
         Trích xuất thực thể ưu tiên Named Entities (NER) trước,
         sau đó dùng Noun Chunks để bổ sung các danh từ chung chưa được nhận diện.
         """
         # print(f"Entities Extract text:\n{text}")
-        doc = self.nlp(text)
+        # doc = self.nlp(text)
         entities = []
         
         # Dùng tập hợp các index của từng token (chữ) để kiểm tra overlapping triệt để
@@ -174,7 +88,7 @@ class InformationExtractor:
             
             head_noun = self._extract_head_noun(ent)
             modifiers = self._extract_modifiers(ent)
-            head_noun_lemma = ent.root.lemma_.lower()
+            head_noun_lemma = ent.root.lemma_
             
             entities.append(Entity(
                 text=ent.text,
@@ -230,148 +144,169 @@ class InformationExtractor:
         # return list(seen_lemmas.values())
     
         return entities
+
+    def extract_entities(self, text: str, doc) -> List[Entity]:
+        # doc = self.preprocessor(text) # Dùng pipeline có fastcoref
         
-    
-    def extract_relations(self, text: str, entities: List[Entity]) -> List[Relation]:
+        # 1. Chạy NER và Noun Chunks bình thường như code cũ của bạn
+        base_entities = self.extract_base_entities(text, doc) 
+        
+        # Gán UUID mặc định cho mọi entity cơ bản
+        for ent in base_entities:
+            if ent.canonical_id is None:
+                ent.canonical_id = str(uuid.uuid4())
+                
+        # 2. Xử lý Coref Clusters để tạo Alias Entities
+        if doc._.coref_clusters:
+            for cluster in doc._.coref_clusters:
+                # cluster là list các char span: [(start, end), (start, end)...]
+                
+                # Tìm entity gốc (Representative) trong list base_entities
+                # Thường là span đầu tiên trong cluster hoặc span đã được NER nhận diện
+                rep_span = cluster[0]
+                canonical_id = None
+                
+                # Tìm xem rep_span có khớp với entity nào đã extract không
+                for ent in base_entities:
+                    # Kiểm tra overlap hoặc match start/end char
+                    if not (rep_span[1] <= ent.start_char or rep_span[0] >= ent.end_char):
+                        canonical_id = ent.canonical_id
+                        break
+                
+                # Nếu cụm coref này không trúng entity nào, tạo ID mới
+                if not canonical_id:
+                    canonical_id = str(uuid.uuid4())
+                    
+                # Duyệt qua các mentions còn lại trong cluster (như "he", "it"...)
+                for mention_span in cluster[1:]:
+                    # Khôi phục span text
+                    mention_text = text[mention_span[0]:mention_span[1]]
+                    
+                    # Bổ sung đại từ này vào danh sách thực thể như một "Alias"
+                    # mang chung canonical_id với entity gốc
+                    alias_entity = Entity(
+                        text=mention_text,
+                        label="COREF_PRON",
+                        start_char=mention_span[0],
+                        end_char=mention_span[1],
+                        head_noun=mention_text, # Tạm dùng text
+                        lemma=mention_text.lower(),
+                        modifiers=[],
+                        confidence=0.9,
+                        canonical_id=canonical_id # QUAN TRỌNG NHẤT
+                    )
+                    base_entities.append(alias_entity)
+                    
+        return base_entities
+
+    def extract_relations(self, text: str, entities: List[Entity], doc=None) -> List[Relation]:
         """
         Trích xuất quan hệ DỰA TRÊN danh sách thực thể đã chốt (Entity-driven).
         Chỉ tạo quan hệ nếu Subject và Object khớp với các Entity hợp lệ.
         """
-        doc = self.nlp(text)
+            
         relations = []
         
-        # 1. BẢN ĐỒ THỰC THỂ (Entity Mapping)
-        # Tạo từ điển mapping: vị trí token (index) -> Entity object.
-        # Điều này giúp ta biết từ nào trên cây cú pháp thuộc về Entity nào.
+        # BƯỚC 1: XÂY DỰNG TỪ ĐIỂN MAPPING TOKEN -> ENTITY
         token_to_entity = {}
         for ent in entities:
-            # Lấy các token tương ứng với khoảng ký tự của entity
             span = doc.char_span(ent.start_char, ent.end_char)
             if span is not None:
                 for token in span:
                     token_to_entity[token.i] = ent
-                    
-        # 2. TÌM QUAN HỆ QUA ĐỘNG TỪ
+
+        # BƯỚC 2: QUÉT 1 VÒNG DUY NHẤT LẤY TOÀN BỘ QUAN HỆ
         for token in doc:
-            if token.pos_ == "VERB":
-                # Bước A: Xây dựng Cụm Vị Ngữ (Predicate) hoàn chỉnh
+            # --- LOẠI 1: QUAN HỆ QUA ĐỘNG TỪ ---
+            if token.pos_ == "VERB" or token.lemma_.lower() == "be":
                 predicate_parts = []
                 
-                # Kiểm tra từ phủ định (vd: "NOT eat")
-                neg = next((c for c in token.children if c.dep_ == "neg"), None)
-                if neg: predicate_parts.append(neg.lemma_.lower())
-                
-                predicate_parts.append(token.lemma_.lower()) # Động từ chính
-                
-                # Kiểm tra phrasal verb (vd: turn OFF, give UP)
-                prt = next((c for c in token.children if c.dep_ == "prt"), None)
-                if prt: predicate_parts.append(prt.lemma_.lower())
-                
-                # Bước B: Tìm Chủ ngữ và Tân ngữ qua cây cú pháp
-                subjects = self._get_subjects(token)
-                objects, prep_lemma = self._get_objects(token)
-                
-                # Nếu có giới từ đi kèm tân ngữ (vd: rely ON), nối vào vị ngữ
-                if prep_lemma:
-                    predicate_parts.append(prep_lemma.lower())
+                if token.pos_ == "VERB":
+                    neg = next((c for c in token.children if c.dep_ == "neg"), None)
+                    if neg: predicate_parts.append(neg.lemma_.lower())
+                    
+                    predicate_parts.append(token.lemma_.lower())
+                    
+                    prt = next((c for c in token.children if c.dep_ == "prt"), None)
+                    if prt: predicate_parts.append(prt.lemma_.lower())
+                    
+                    # Cây cú pháp xuyên thấu
+                    subjects = self._get_subjects(token)
+                    objects, prep_lemma = self._get_objects(token)
+                    
+                    if prep_lemma: predicate_parts.append(prep_lemma.lower())
+                else: # token.lemma_ == "be"
+                    predicate_parts.append("has_attribute")
+                    subjects = self._get_subjects(token)
+                    objects = [c for c in token.children if c.dep_ in ("acomp", "attr", "oprd")]
                     
                 predicate_text = " ".join(predicate_parts)
-                
-                # Bước C: Kiểm tra câu Bị động (Passive Voice)
                 is_passive = any(c.dep_ == "nsubjpass" for c in token.children)
-
-                # Bước D: Kiểm tra adverb modifier
                 advmods = [c for c in token.children if c.dep_ == "advmod"]
                 
-                # Bước D: Lọc và kết nối các Thực Thể
                 for subj_token in subjects:
                     subj_ent = token_to_entity.get(subj_token.i)
-                    if not subj_ent: 
-                        continue # Bỏ qua nếu chủ ngữ không phải là Entity đã biết
+                    if not subj_ent: continue
                         
                     for obj_token in objects:
                         obj_ent = token_to_entity.get(obj_token.i)
-                        if not obj_ent: 
-                            continue # Bỏ qua nếu tân ngữ không phải là Entity đã biết
+                        
+                        if obj_ent:
+                            # Tránh tự refer (Bây giờ so sánh bằng canonical_id là CHUẨN XÁC NHẤT)
+                            if subj_ent.canonical_id == obj_ent.canonical_id: continue
                             
-                        # Chống lỗi vòng lặp (Subject = Object)
-                        if getattr(subj_ent, 'lemma', subj_ent.head_noun) == getattr(obj_ent, 'lemma', obj_ent.head_noun):
-                            continue
+                            final_subj = obj_ent.canonical_id if is_passive else subj_ent.canonical_id
+                            final_obj = subj_ent.canonical_id if is_passive else obj_ent.canonical_id
+                                
+                            relations.append(Relation(
+                                subject=final_subj, predicate=predicate_text, obj=final_obj,
+                                source_sentence=text, confidence=0.85
+                            ))
                             
-                        # Nếu là câu bị động (Grass is eaten by cow), đảo ngược chiều quan hệ
-                        if is_passive:
-                            final_subj = getattr(obj_ent, 'lemma', obj_ent.head_noun)
-                            final_obj = getattr(subj_ent, 'lemma', subj_ent.head_noun)
-                        else:
-                            final_subj = getattr(subj_ent, 'lemma', subj_ent.head_noun)
-                            final_obj = getattr(obj_ent, 'lemma', obj_ent.head_noun)
-                            
+                    # Xử lý adverbs (manner)
+                    for adv in advmods:
                         relations.append(Relation(
-                            subject=final_subj,
-                            predicate=predicate_text,
-                            obj=final_obj,
-                            source_sentence=text,
-                            confidence=0.85
+                            subject=subj_ent.canonical_id, predicate=f"{token.lemma_.lower()}_manner",
+                            obj=adv.lemma_.lower(), source_sentence=text, confidence=0.75
                         ))
 
-                    for adv in advmods:
-                        relations.append(
-                            Relation(
-                                subject=subj_ent.lemma,
-                                predicate=f"{token.lemma_.lower()}_manner",
-                                obj=adv.lemma_.lower(),
-                                source_sentence=text,
-                                confidence=0.75
-                            )
-                        )
+            # --- LOẠI 2: QUAN HỆ ĐỒNG VỊ (APPOSITION) ---
+            if token.dep_ == "appos":
+                head = token.head
+                subj_ent = token_to_entity.get(head.i)
+                appos_ent = token_to_entity.get(token.i)
+                
+                # So sánh bằng canonical_id để đảm bảo chúng không trỏ về cùng 1 node
+                if subj_ent and appos_ent and subj_ent.canonical_id != appos_ent.canonical_id:
+                    relations.append(Relation(
+                        subject=subj_ent.canonical_id, predicate="is", obj=appos_ent.canonical_id,
+                        source_sentence=text, confidence=0.90
+                    ))
 
-            elif token.lemma_.lower() == "be":
-                subjects = self._get_subjects(token)
-
-                attrs = [
-                    c for c in token.children
-                    if c.dep_ in ("acomp", "attr", "oprd")
-                ]
-
-                for subj_token in subjects:
-                    subj_ent = token_to_entity.get(subj_token.i)
-
-                    if not subj_ent:
-                        continue
-
-                    for attr in attrs:
-                        relations.append(
-                            Relation(
-                                subject=subj_ent.lemma,
-                                predicate="has_attribute",
-                                obj=attr.lemma_.lower(),
-                                source_sentence=text,
-                                confidence=0.80
-                            )
-                        )
-                        
-        # Lọc trùng lặp
-        unique_relations = { (r.subject, r.predicate, r.obj): r for r in relations }
+        # Lọc trùng lặp Relation
+        unique_relations = {(r.subject, r.predicate, r.obj): r for r in relations}
         return list(unique_relations.values())
 
     def _get_subjects(self, verb_token) -> List[Any]:
         """Tìm các chủ ngữ của một động từ, xử lý cả liên từ và rút gọn chủ ngữ."""
         subjects = []
         for child in verb_token.children:
-            # Chủ ngữ trực tiếp hoặc chủ ngữ bị động
             if child.dep_ in ["nsubj", "nsubjpass", "csubj", "csubjpass"]:
-                subjects.append(child)
-                # Bắt các chủ ngữ nối nhau bằng "and" (vd: Cow and sheep eat...)
+                # TUYỆT CHIÊU: Xuyên thấu đại từ quan hệ
+                if child.lower_ in {"that", "which", "who", "whom"} and verb_token.dep_ == "relcl":
+                    subjects.append(verb_token.head) # Trả về thẳng danh từ gốc
+                else:
+                    subjects.append(child)
+                
+                # Xử lý liên từ (and/or)
                 for grandchild in child.children:
                     if grandchild.dep_ == "conj":
                         subjects.append(grandchild)
                         
-        # GIẢI QUYẾT BÀI TOÁN "cow eat grass and leave" (Tỉnh lược chủ ngữ)
-        # Nếu động từ này không có chủ ngữ, nhưng nó được nối với một động từ trước đó
+        # Mượn chủ ngữ nếu tỉnh lược
         if not subjects and verb_token.dep_ == "conj":
             head_verb = verb_token.head
             if head_verb.pos_ == "VERB":
-                # Đệ quy: Mượn chủ ngữ của động từ đứng trước
                 subjects = self._get_subjects(head_verb)
                 
         return subjects
@@ -382,22 +317,28 @@ class InformationExtractor:
         prep_lemma = None
         
         for child in verb_token.children:
-            # Tân ngữ trực tiếp
             if child.dep_ in ["dobj", "attr", "oprd"]:
-                objects.append(child)
-                # Tân ngữ nối bằng "and" (vd: eat grass and leaves)
+                # Tương tự cho tân ngữ (VD: The book that I read)
+                if child.lower_ in {"that", "which", "who", "whom"} and verb_token.dep_ == "relcl":
+                    objects.append(verb_token.head)
+                else:
+                    objects.append(child)
+                    
                 for grandchild in child.children:
                     if grandchild.dep_ == "conj":
                         objects.append(grandchild)
                         
-            # Tân ngữ của giới từ / tác nhân bị động (by)
             elif child.dep_ in ["prep", "agent"]:
                 for pobj in child.children:
                     if pobj.dep_ == "pobj":
-                        objects.append(pobj)
+                        if pobj.lower_ in {"that", "which", "whom"} and verb_token.dep_ == "relcl":
+                            objects.append(verb_token.head)
+                        else:
+                            objects.append(pobj)
+                        
                         if child.dep_ == "prep":
-                            prep_lemma = child.lemma_.lower()  # Lưu lại giới từ thông thường (không phải bị động)
-                        # Tân ngữ giới từ nối bằng "and"
+                            prep_lemma = child.lemma_.lower()
+                            
                         for grandchild in pobj.children:
                             if grandchild.dep_ == "conj":
                                 objects.append(grandchild)
@@ -450,9 +391,26 @@ class InformationExtractor:
         """
         modifiers = []
         for token in span:
-            if token.pos_ in ["ADJ", "ADV"]:
+            if token.pos_ in ["ADJ", "ADV", "NOUN"] and token.text != span.root.text:
                 modifiers.append(token.text)
         return modifiers
+    
+    def filter_entities_by_relations(self, entities: List[Entity], relations: List[Relation]) -> List[Entity]:
+        # Lấy tất cả canonical_id xuất hiện trong relation
+        related_entity_ids = {
+            rel.subject for rel in relations
+        } | {
+            rel.obj for rel in relations
+        }
+
+        # Chỉ giữ entity có canonical_id xuất hiện trong relation
+        filtered_entities = [
+            entity
+            for entity in entities
+            if entity.canonical_id in related_entity_ids
+        ]
+
+        return filtered_entities
     
     def process_text(self, text: str) -> Dict[str, Any]:
         """
@@ -464,25 +422,15 @@ class InformationExtractor:
         Returns:
             Dictionary containing extracted entities, relations, and chunks
         """
-        coref_text = self.preprocess(text)
-        entities_1 = self.extract_entities(coref_text)
 
-        doc = self.nlp(coref_text)
+        doc = self.preprocessor(text)
 
-        new_sentences = []
-        new_sentences.extend(self._resolve_relative_clauses(doc, entities_1))
-        new_sentences.extend(self._resolve_appositions(doc, entities_1))
+        entities = self.extract_entities(text, doc)
+        relations = self.extract_relations(text, entities, doc)
 
-        full_text = coref_text
-        if new_sentences:
-            full_text += " " + " ".join(new_sentences)
-        print(f"Here is full text:\n{full_text}")
-
-        entities_2 = self.extract_entities(full_text)
-        relations = self.extract_relations(full_text, entities_2)
-        
+        filter_entities = self.filter_entities_by_relations(entities, relations)
         return {
-            "text": coref_text,
-            "entities": [asdict(e) for e in entities_2],
+            "text": text,
+            "entities": [asdict(e) for e in filter_entities],
             "relations": [asdict(r) for r in relations],
         }
