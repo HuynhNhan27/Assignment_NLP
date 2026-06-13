@@ -120,7 +120,7 @@ A sophisticated NLP pipeline that converts educational texts into a Labeled Prop
 
 5. **Download NLTK data** (run once):
    ```bash
-   python -c "import nltk; nltk.download('wordnet'); nltk.download('averaged_perceptron_tagger'); nltk.download('universal_tagset')"
+   python -c "import nltk; nltk.download('wordnet'); nltk.download('punkt'); nltk.download('stopwords'); nltk.download('averaged_perceptron_tagger'); nltk.download('universal_tagset')"
    ```
 
 ## Quick Start

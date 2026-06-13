@@ -40,9 +40,9 @@ class TextToKnowledgeGraphPipeline:
         print("[INIT] Loading Information Extractor (spaCy)...")
         self.ie_extractor = InformationExtractor(model_name="en_core_web_sm")
         
-        # # Stage 2: WSD & Normalization
-        # print("[INIT] Loading Word Sense Disambiguator (sentence-transformers)...")
-        # self.wsd = WordSenseDisambiguator()
+        # Stage 2: WSD & Normalization
+        print("[INIT] Loading Word Sense Disambiguator (sentence-transformers)...")
+        self.wsd = WordSenseDisambiguator()
         
         # print("[INIT] Loading Entity Normalizer (fuzzy + embeddings)...")
         # self.entity_normalizer = EntityNormalizer()
@@ -104,36 +104,28 @@ class TextToKnowledgeGraphPipeline:
         """
         print("\n[STAGE 2] Word Sense Disambiguation & Normalization")
         text = extraction_result['text']
+        entities = extraction_result['entities']
         
         # Extract unique entities
-        entities = [e['text'] for e in extraction_result['entities']]
-        entity_map = self.entity_normalizer.normalize_entities(entities)
+        # entities = [e['text'] for e in extraction_result['entities']]
+        # entity_map = self.entity_normalizer.normalize_entities(entities)
         
-        print(f"  - Normalized entities: {len(entity_map)}")
-        for original, canonical in list(entity_map.items())[:5]:
-            if original != canonical:
-                print(f"    * {original} -> {canonical}")
+        # print(f"  - Normalized entities: {len(entity_map)}")
+        # for original, canonical in list(entity_map.items())[:5]:
+        #     if original != canonical:
+        #         print(f"    * {original} -> {canonical}")
         
-        # Disambiguate (example on first few entities)
-        disambiguated = []
-        for entity_text in list(set(entities))[:3]:
-            # print(f"[Disambiguated] entity_text: {entity_text}")
-            result = self.wsd.disambiguate(entity_text, text)
-            if result:
-                disambiguated.append({
-                    "text": entity_text,
-                    "synset": result.synset_id,
-                    "definition": result.definition,
-                    "confidence": result.confidence
-                })
+        # Disambiguate
+        disambiguated_entities = self.wsd.disambiguate(text, entities)
         
-        print(f"  - Disambiguated sample: {len(disambiguated)} entities")
-        for d in disambiguated:
-            print(f"    * {d['text']} -> {d['synset']} (conf: {d['confidence']:.2f})")
+        print(f"  - Disambiguated sample: {len(disambiguated_entities)} entities")
+        for d in disambiguated_entities:
+            print(f"    * {d['text']} -> {d['definition']} (conf: {d['confidence']:.2f})")
+            print(f"       ID: {d['canonical_id']}")
         
         return {
-            "entity_map": entity_map,
-            "disambiguated": disambiguated
+            # "entity_map": entity_map,
+            "disambiguated": disambiguated_entities
         }
     
     def stage_3_ontology_resolution(self, extraction_result: Dict[str, Any], 
@@ -297,7 +289,7 @@ class TextToKnowledgeGraphPipeline:
         # Tiền xử lý trong IE
         # Execute all stages
         stage1_result = self.stage_1_information_extraction(text)
-        # stage2_result = self.stage_2_wsd_and_normalization(stage1_result)
+        stage2_result = self.stage_2_wsd_and_normalization(stage1_result)
         # stage3_result = self.stage_3_ontology_resolution(stage1_result, stage2_result)
         # graph = self.stage_4_graph_construction(stage1_result, stage2_result, stage3_result)
         # self.stage_5_export(graph, output_path)
