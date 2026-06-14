@@ -51,9 +51,9 @@ class TextToKnowledgeGraphPipeline:
         print("[INIT] Loading Ontology Resolver (WordNet)...")
         self.ontology_resolver = OntologyResolver()
         
-        # # Stage 4: Graph Construction
-        # print("[INIT] Initializing Graph Constructor (NetworkX)...")
-        # self.graph_constructor = GraphConstructor()
+        # Stage 4: Graph Construction
+        print("[INIT] Initializing Graph Constructor (NetworkX)...")
+        self.graph_constructor = GraphConstructor()
     
     def stage_1_information_extraction(self, text: str) -> Dict[str, Any]:
         """
@@ -124,10 +124,7 @@ class TextToKnowledgeGraphPipeline:
             print(f"    * {d['text']} -> {d['definition']} (conf: {d['confidence']:.2f})")
             print(f"       ID: {d['canonical_id']}")
         
-        return {
-            # "entity_map": entity_map,
-            "disambiguated": disambiguated_entities
-        }
+        return disambiguated_entities
     
     def stage_3_ontology_resolution(self, extraction_result: Dict[str, Any], 
                                     wsd_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -143,7 +140,7 @@ class TextToKnowledgeGraphPipeline:
         """
         print("\n[STAGE 3] Ontology & Hierarchy Resolution")
         
-        final_kg = self.ontology_resolver.resolve(extraction_result["entities"], wsd_result["disambiguated"], extraction_result["relations"])
+        final_kg = self.ontology_resolver.resolve(extraction_result["entities"], wsd_result, extraction_result["relations"])
 
         print(f"  - Ontology Entities: {len(final_kg['nodes'])} entities")
         for n in final_kg['nodes']:
@@ -153,13 +150,11 @@ class TextToKnowledgeGraphPipeline:
         for rel in final_kg['relations']:
             print(f"(ID relation:   * {rel['subject']} --[{rel['predicate']}]--> {rel['obj']})")
         
-        return {
-            "kg": final_kg,
-        }
+        return final_kg
     
     def stage_4_graph_construction(self, 
                                    extraction_result: Dict[str, Any],
-                                   normalization_result: Dict[str, Any],
+                                   wsd_result: Dict[str, Any],
                                    ontology_result: Dict[str, Any]) -> GraphConstructor:
         """
         Stage 4: Build the Knowledge Graph with merging.
@@ -174,68 +169,78 @@ class TextToKnowledgeGraphPipeline:
         """
         print("\n[STAGE 4] Graph Construction")
         
-        # Get entities from Stage 1 (now includes noun chunks)
-        entities = list(set([e['text'] for e in extraction_result['entities']]))
-        entity_map = normalization_result['entity_map']
+        # # Get entities from Stage 1 (now includes noun chunks)
+        # entities = list(set([e['text'] for e in extraction_result['entities']]))
+        # entity_map = normalization_result['entity_map']
         
-        # If no entities found, extract from relations
-        if not entities:
-            relations = extraction_result['relations']
-            subjects = set([r['subject'] for r in relations])
-            objects = set([r['obj'] for r in relations])
-            entities = list(subjects | objects)
-            entity_map = self.entity_normalizer.normalize_entities(entities)
-            print(f"  - No direct entities found; extracted {len(entities)} from relations")
+        # # If no entities found, extract from relations
+        # if not entities:
+        #     relations = extraction_result['relations']
+        #     subjects = set([r['subject'] for r in relations])
+        #     objects = set([r['obj'] for r in relations])
+        #     entities = list(subjects | objects)
+        #     entity_map = self.entity_normalizer.normalize_entities(entities)
+        #     print(f"  - No direct entities found; extracted {len(entities)} from relations")
         
-        # Add entity nodes to graph
-        entity_nodes = {}
-        for entity in entities:
-            canonical = entity_map.get(entity, entity)
-            node_id = self.graph_constructor.add_node(
-                label=canonical,
-                node_type="entity",
-                properties={"original": entity}
-            )
-            entity_nodes[canonical] = node_id
+        # # Add entity nodes to graph
+        # entity_nodes = {}
+        # for entity in entities:
+        #     canonical = entity_map.get(entity, entity)
+        #     node_id = self.graph_constructor.add_node(
+        #         label=canonical,
+        #         node_type="entity",
+        #         properties={"original": entity}
+        #     )
+        #     entity_nodes[canonical] = node_id
         
-        print(f"  - Added {len(entity_nodes)} entity nodes")
+        # print(f"  - Added {len(entity_nodes)} entity nodes")
         
-        # Add relations as edges
-        relations = ontology_result['normalized_relations']
-        edge_count = 0
-        for rel in relations:
-            subject_canonical = entity_map.get(rel['subject'], rel['subject'])
-            object_canonical = entity_map.get(rel['object'], rel['object'])
+        # # Add relations as edges
+        # relations = ontology_result['normalized_relations']
+        # edge_count = 0
+        # for rel in relations:
+        #     subject_canonical = entity_map.get(rel['subject'], rel['subject'])
+        #     object_canonical = entity_map.get(rel['object'], rel['object'])
             
-            if subject_canonical in entity_nodes and object_canonical in entity_nodes:
-                self.graph_constructor.add_edge(
-                    source_id=entity_nodes[subject_canonical],
-                    target_id=entity_nodes[object_canonical],
-                    relation_type=rel['predicate'],
-                    properties={"confidence": 0.85}
-                )
-                edge_count += 1
+        #     if subject_canonical in entity_nodes and object_canonical in entity_nodes:
+        #         self.graph_constructor.add_edge(
+        #             source_id=entity_nodes[subject_canonical],
+        #             target_id=entity_nodes[object_canonical],
+        #             relation_type=rel['predicate'],
+        #             properties={"confidence": 0.85}
+        #         )
+        #         edge_count += 1
         
-        print(f"  - Added {edge_count} relation edges")
+        # print(f"  - Added {edge_count} relation edges")
         
-        # Add hierarchy edges (example)
-        for entity, hierarchy in ontology_result['hierarchies'].items():
-            if hierarchy.get('hierarchy'):
-                entity_canonical = entity_map.get(entity, entity)
-                if entity_canonical in entity_nodes:
-                    for h in hierarchy['hierarchy'][:2]:
-                        parent_id = self.graph_constructor.add_node(
-                            label=h['text'],
-                            node_type="concept",
-                            properties={"definition": h['definition']}
-                        )
-                        self.graph_constructor.add_hierarchy_edge(
-                            child_id=entity_nodes[entity_canonical],
-                            parent_id=parent_id
-                        )
+        # # Add hierarchy edges (example)
+        # for entity, hierarchy in ontology_result['hierarchies'].items():
+        #     if hierarchy.get('hierarchy'):
+        #         entity_canonical = entity_map.get(entity, entity)
+        #         if entity_canonical in entity_nodes:
+        #             for h in hierarchy['hierarchy'][:2]:
+        #                 parent_id = self.graph_constructor.add_node(
+        #                     label=h['text'],
+        #                     node_type="concept",
+        #                     properties={"definition": h['definition']}
+        #                 )
+        #                 self.graph_constructor.add_hierarchy_edge(
+        #                     child_id=entity_nodes[entity_canonical],
+        #                     parent_id=parent_id
+        #                 )
         
-        print(f"  - Graph statistics: {self.graph_constructor.get_statistics()}")
+        # print(f"  - Graph statistics: {self.graph_constructor.get_statistics()}")
         
+        # return self.graph_constructor
+
+        print(f"  - Ontology Entities: {len(ontology_result['nodes'])} entities")
+        print(f"  - Ontology Relations: {len(ontology_result['relations'])} relations")
+
+        self.graph_constructor.build_from_pipeline(
+            ontology_data=ontology_result, 
+            wsd_data=wsd_result
+        )
+
         return self.graph_constructor
     
     def stage_5_export(self, graph: GraphConstructor, output_path: str) -> None:
@@ -277,8 +282,8 @@ class TextToKnowledgeGraphPipeline:
         stage1_result = self.stage_1_information_extraction(text)
         stage2_result = self.stage_2_wsd_and_normalization(stage1_result)
         stage3_result = self.stage_3_ontology_resolution(stage1_result, stage2_result)
-        # graph = self.stage_4_graph_construction(stage1_result, stage2_result, stage3_result)
-        # self.stage_5_export(graph, output_path)
+        graph = self.stage_4_graph_construction(stage1_result, stage2_result, stage3_result)
+        self.stage_5_export(graph, output_path)
         
         print("\n" + "=" * 80)
         print("PIPELINE COMPLETE")
