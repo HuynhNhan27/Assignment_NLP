@@ -12,7 +12,7 @@ Pipeline stages:
 import sys
 import json
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import spacy
 
 # Import pipeline modules
@@ -44,16 +44,29 @@ class TextToKnowledgeGraphPipeline:
         print("[INIT] Loading Word Sense Disambiguator (sentence-transformers)...")
         self.wsd = WordSenseDisambiguator()
         
-        # print("[INIT] Loading Entity Normalizer (fuzzy + embeddings)...")
-        # self.entity_normalizer = EntityNormalizer()
+        print("[INIT] Loading Entity Normalizer (fuzzy + embeddings)...")
+        self.entity_normalizer = EntityNormalizer()
         
-        # # Stage 3: Ontology & Hierarchy
-        # print("[INIT] Loading Ontology Resolver (WordNet)...")
-        # self.ontology = OntologyResolver()
+        # Stage 3: Ontology & Hierarchy
+        print("[INIT] Loading Ontology Resolver (WordNet)...")
+        self.ontology = OntologyResolver()
         
-        # # Stage 4: Graph Construction
-        # print("[INIT] Initializing Graph Constructor (NetworkX)...")
-        # self.graph_constructor = GraphConstructor()
+        # Stage 4: Graph Construction
+        print("[INIT] Initializing Graph Constructor (NetworkX)...")
+        self.graph_constructor = GraphConstructor()
+
+    def _json_safe_modifiers(self, modifiers: List[Any]) -> List[Dict[str, Any]]:
+        """Convert nested modifier objects or dicts into plain JSON-safe dictionaries."""
+        safe_modifiers = []
+        for modifier in modifiers or []:
+            if hasattr(modifier, "to_dict"):
+                safe_modifiers.append(modifier.to_dict())
+            elif isinstance(modifier, dict):
+                safe_nested = dict(modifier)
+                nested = safe_nested.get("modifiers", [])
+                safe_nested["modifiers"] = self._json_safe_modifiers(nested)
+                safe_modifiers.append(safe_nested)
+        return safe_modifiers
     
     def stage_1_information_extraction(self, text: str) -> Dict[str, Any]:
         """
@@ -76,10 +89,25 @@ class TextToKnowledgeGraphPipeline:
         
         print(f"  - Entities found: {len(extraction_result['entities'])}")
         for entity in extraction_result['entities'][:]:
+            modifier_summary = entity.get('modifier_summary', {})
+            modifiers = entity.get('modifiers', [])
             print(f"    * {entity['text']} ({entity['label']}) -> head: {entity['head_noun']}")
             print(f"      head_noun: {entity['head_noun']}")
-            print(f"      modifiers: {entity['modifiers']}")
             print(f"      id: {entity['canonical_id']}")
+            if modifier_summary:
+                print(f"      modifiers: {modifier_summary}")
+            if modifiers:
+                detailed = []
+                for mod in modifiers:
+                    text = mod.get('text', '')
+                    mod_type = mod.get('type', '')
+                    nested = mod.get('modifiers', [])
+                    if nested:
+                        nested_text = ", ".join(m.get('text', '') for m in nested)
+                        detailed.append(f"{text} [{mod_type}] <- {nested_text}")
+                    else:
+                        detailed.append(f"{text} [{mod_type}]")
+                print(f"      detailed: {detailed}")
 
         print(f"  - Relations found: {len(extraction_result['relations'])}")
         for rel in extraction_result['relations']:
@@ -107,13 +135,13 @@ class TextToKnowledgeGraphPipeline:
         entities = extraction_result['entities']
         
         # Extract unique entities
-        # entities = [e['text'] for e in extraction_result['entities']]
-        # entity_map = self.entity_normalizer.normalize_entities(entities)
-        
-        # print(f"  - Normalized entities: {len(entity_map)}")
-        # for original, canonical in list(entity_map.items())[:5]:
-        #     if original != canonical:
-        #         print(f"    * {original} -> {canonical}")
+        entities_text = [e['text'] for e in extraction_result['entities']]
+        entity_map = self.entity_normalizer.normalize_entities(entities_text)
+
+        print(f"  - Normalized entities: {len(entity_map)}")
+        for original, canonical in list(entity_map.items())[:5]:
+            if original != canonical:
+                print(f"    * {original} -> {canonical}")
         
         # Disambiguate
         disambiguated_entities = self.wsd.disambiguate(text, entities)
@@ -124,7 +152,7 @@ class TextToKnowledgeGraphPipeline:
             print(f"       ID: {d['canonical_id']}")
         
         return {
-            # "entity_map": entity_map,
+            "entity_map": entity_map,
             "disambiguated": disambiguated_entities
         }
     
@@ -190,7 +218,9 @@ class TextToKnowledgeGraphPipeline:
         
         # Get entities from Stage 1 (now includes noun chunks)
         entities = list(set([e['text'] for e in extraction_result['entities']]))
-        entity_map = normalization_result['entity_map']
+        entity_map = normalization_result.get('entity_map')
+        if entity_map is None:
+            entity_map = self.entity_normalizer.normalize_entities(entities)
         
         # If no entities found, extract from relations
         if not entities:
@@ -205,12 +235,42 @@ class TextToKnowledgeGraphPipeline:
         entity_nodes = {}
         for entity in entities:
             canonical = entity_map.get(entity, entity)
+            entity_data = next((e for e in extraction_result['entities'] if e['text'] == entity), None)
+            if entity_data is None:
+                entity_data = next((e for e in extraction_result['entities'] if e.get('head_noun', '').lower() == entity.lower()), None)
             node_id = self.graph_constructor.add_node(
                 label=canonical,
                 node_type="entity",
-                properties={"original": entity}
+                properties={
+                    "original": entity,
+                    "canonical_id": entity_data.get('canonical_id') if entity_data else None,
+                    "head_noun": entity_data.get('head_noun') if entity_data else None,
+                    "lemma": entity_data.get('lemma') if entity_data else None,
+                    "label": entity_data.get('label') if entity_data else None,
+                    "confidence": entity_data.get('confidence') if entity_data else None,
+                    "modifiers": self._json_safe_modifiers(entity_data.get('modifiers') if entity_data else []),
+                    "modifier_summary": entity_data.get('modifier_summary') if entity_data else {},
+                }
             )
             entity_nodes[canonical] = node_id
+            if entity_data:
+                if entity_data.get('canonical_id'):
+                    entity_nodes[entity_data['canonical_id']] = node_id
+                entity_nodes[entity_data.get('text', entity)] = node_id
+                if entity_data.get('lemma'):
+                    entity_nodes[entity_data['lemma']] = node_id
+                if entity_data.get('head_noun'):
+                    entity_nodes[entity_data['head_noun']] = node_id
+
+        def resolve_node_id(name: str) -> Optional[str]:
+            if not name:
+                return None
+            if name in entity_nodes:
+                return entity_nodes[name]
+            lower_name = name.lower()
+            if lower_name in entity_nodes:
+                return entity_nodes[lower_name]
+            return entity_nodes.get(entity_map.get(name, name))
         
         print(f"  - Added {len(entity_nodes)} entity nodes")
         
@@ -220,13 +280,20 @@ class TextToKnowledgeGraphPipeline:
         for rel in relations:
             subject_canonical = entity_map.get(rel['subject'], rel['subject'])
             object_canonical = entity_map.get(rel['object'], rel['object'])
-            
-            if subject_canonical in entity_nodes and object_canonical in entity_nodes:
+            subject_id = resolve_node_id(rel['subject']) or resolve_node_id(subject_canonical)
+            object_id = resolve_node_id(rel['object']) or resolve_node_id(object_canonical)
+
+            if subject_id and object_id:
                 self.graph_constructor.add_edge(
-                    source_id=entity_nodes[subject_canonical],
-                    target_id=entity_nodes[object_canonical],
+                    source_id=subject_id,
+                    target_id=object_id,
                     relation_type=rel['predicate'],
-                    properties={"confidence": 0.85}
+                    properties={
+                        "confidence": 0.85,
+                        "source_sentence": extraction_result.get('text', ''),
+                        "original_subject": rel['subject'],
+                        "original_object": rel['object'],
+                    }
                 )
                 edge_count += 1
         
@@ -290,9 +357,9 @@ class TextToKnowledgeGraphPipeline:
         # Execute all stages
         stage1_result = self.stage_1_information_extraction(text)
         stage2_result = self.stage_2_wsd_and_normalization(stage1_result)
-        # stage3_result = self.stage_3_ontology_resolution(stage1_result, stage2_result)
-        # graph = self.stage_4_graph_construction(stage1_result, stage2_result, stage3_result)
-        # self.stage_5_export(graph, output_path)
+        stage3_result = self.stage_3_ontology_resolution(stage1_result, stage2_result)
+        graph = self.stage_4_graph_construction(stage1_result, stage2_result, stage3_result)
+        self.stage_5_export(graph, output_path)
         
         print("\n" + "=" * 80)
         print("PIPELINE COMPLETE")
@@ -329,13 +396,15 @@ Cattle are large artiodactyls, mammals with cloven hooves, meaning that they wal
     """
 
     sample_test = """
-    Cows are herbivorous mammals that eat grass in meadows
+    The newly implemented corporate environmental policy, aiming for zero emissions by 2030, drastically altered production schedules across all domestic factories
     """
 
     # Cows are herbivorous mammals that eat grass in meadows
     # Elon Musk, who is a billionaire, announced a new model.
     # Two young, talented artists painted a wooden picture frame in the studio.
-    # Two không nhận diện được, and và ',' ra kết quả khác nhau.
+        # Two không nhận diện được, and và ',' ra kết quả khác nhau.
+    # Whispering quietly, the worried mother checked on her sleeping baby who had a fever.
+        # Đã phân tích tốt về ngữ nghĩa, nhưng thiếu 
 
     # Initialize and run pipeline
     pipeline = TextToKnowledgeGraphPipeline()

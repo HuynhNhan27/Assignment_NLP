@@ -6,28 +6,32 @@ Handles:
 - Relation Extraction
 - Co-reference Resolution
 - Noun Chunking with Head Noun Extraction
+- Comprehensive Modifier Extraction with Hierarchical Support
 
 Tool: spaCy (en_core_web_sm)
 """
 
 import uuid
 import spacy
-from typing import List, Dict, Tuple, Any
-from dataclasses import dataclass, asdict
+from typing import List, Dict, Tuple, Any, Optional
+from dataclasses import dataclass, asdict, field
+
+from .modifier_extraction import Modifier, ModifierExtractor, ModifierType
 
 
 @dataclass
 class Entity:
-    """Represents an extracted entity with metadata."""
+    """Represents an extracted entity with metadata and structured modifiers."""
     text: str
     label: str
     start_char: int
     end_char: int
     head_noun: str
-    lemma: str # Tạm thời để full lowercase, chưa xét đến tên riêng
-    modifiers: List[str]
-    confidence: float
-    canonical_id: str = None  # ID định danh duy nhất cho KG
+    lemma: str  # Lemma of the head noun
+    modifiers: List[Modifier] = field(default_factory=list)
+    modifier_summary: Dict[str, int] = field(default_factory=dict)
+    confidence: float = 0.9
+    canonical_id: Optional[str] = None  # ID định danh duy nhất cho KG
 
 @dataclass
 class Relation:
@@ -60,36 +64,45 @@ class InformationExtractor:
         try:
             self.nlp = spacy.load(model_name)
             self.preprocessor = spacy.load(model_name)
-            self.preprocessor.add_pipe("fastcoref", config={"model_architecture": "FCoref", "device": "cpu"})
+            
+            # Try to add fastcoref for coreference resolution (optional)
+            try:
+                self.preprocessor.add_pipe("fastcoref", config={"model_architecture": "FCoref", "device": "cpu"})
+                self.has_coref = True
+            except ValueError as e:
+                print(f"⚠️  Warning: fastcoref not available - coreference resolution disabled")
+                print(f"    To enable, run: pip install spacy-coref")
+                self.has_coref = False
+                
         except OSError:
             print(f"Model {model_name} not found. Please run: python -m spacy download {model_name}")
             raise
+        
+        # Initialize modifier extraction engine
+        self.modifier_extractor = ModifierExtractor()
 
-    def preprocess(self, text: str) -> str:
-        doc = self.preprocessor(text, component_cfg={"fastcoref": {"resolve_text": True}})
-        return doc
+    def preprocess(self, text: str):
+        """Preprocess text with optional coreference resolution."""
+        if self.has_coref:
+            try:
+                return self.preprocessor(text, component_cfg={"fastcoref": {"resolve_text": True}})
+            except Exception as e:
+                print(f"⚠️  Coreference resolution failed: {e}. Falling back to plain spaCy parsing.")
+        return self.nlp(text)
 
     def extract_base_entities(self, text: str, doc) -> List[Entity]:
-        """
-        Trích xuất thực thể ưu tiên Named Entities (NER) trước,
-        sau đó dùng Noun Chunks để bổ sung các danh từ chung chưa được nhận diện.
-        """
-        # print(f"Entities Extract text:\n{text}")
-        # doc = self.nlp(text)
+        """Extract entities from NER and noun chunks without coreference aliases."""
         entities = []
-        
-        # Dùng tập hợp các index của từng token (chữ) để kiểm tra overlapping triệt để
         seen_token_indices = set()
-        
-        # BƯỚC 1: Ưu tiên Named Entities (NER)
+
         for ent in doc.ents:
-            # Đánh dấu tất cả các token thuộc NER này là "đã xử lý"
             seen_token_indices.update(range(ent.start, ent.end))
-            
+
             head_noun = self._extract_head_noun(ent)
             modifiers = self._extract_modifiers(ent)
-            head_noun_lemma = ent.root.lemma_
-            
+            head_noun_lemma = ent.root.lemma_.lower()
+            modifier_summary = self.modifier_extractor.get_modifier_summary(modifiers)
+
             entities.append(Entity(
                 text=ent.text,
                 label=ent.label_,
@@ -98,113 +111,155 @@ class InformationExtractor:
                 head_noun=head_noun,
                 lemma=head_noun_lemma,
                 modifiers=modifiers,
-                confidence=0.95
+                modifier_summary=modifier_summary,
+                confidence=0.95,
+                canonical_id=str(uuid.uuid4())
             ))
-            
-        # BƯỚC 2: Quét Noun Chunks (Các cụm danh từ chung)
+
         for chunk in doc.noun_chunks:
-            # Kiểm tra Overlapping: Nếu BẤT KỲ token nào trong chunk này đã nằm trong NER, thì bỏ qua
             if any(i in seen_token_indices for i in range(chunk.start, chunk.end)):
                 continue
-                
-            # Lọc Đại từ: Chỉ bỏ qua nếu DANH TỪ CHÍNH (root) là đại từ (vd: "It", "They").
-            # Điều này giúp giữ lại những cụm như "my green car" vì root là "car" (Noun).
+
             if chunk.root.pos_ == "PRON":
                 continue
-            
-            # Thay vì tự dò _extract_head_noun, spaCy đã cung cấp sẵn chunk.root cực kỳ chính xác
+
             head_noun = chunk.root.text
             modifiers = self._extract_modifiers(chunk)
             head_noun_lemma = chunk.root.lemma_.lower()
-            
-            # (Tuỳ chọn bổ sung sau này): Bạn có thể loại bỏ các từ hạn định (a, an, the, my...)
-            # ra khỏi text ở đây nếu muốn Knowledge Graph sạch hơn.
-            
+            modifier_summary = self.modifier_extractor.get_modifier_summary(modifiers)
+
             entities.append(Entity(
                 text=chunk.text,
-                label="NOUN", 
+                label="NOUN",
                 start_char=chunk.start_char,
                 end_char=chunk.end_char,
                 head_noun=head_noun,
                 lemma=head_noun_lemma,
                 modifiers=modifiers,
-                confidence=0.90
+                modifier_summary=modifier_summary,
+                confidence=0.90,
+                canonical_id=str(uuid.uuid4())
             ))
-            
-            # Đánh dấu các token của chunk này
-            seen_token_indices.update(range(chunk.start, chunk.end))
-            
-        # # Lấy confidence cao hơn nếu chung lemma (lấy NER)
-        # seen_lemmas: Dict[str, Entity] = {}
-        # for ent in entities:
-        #     existing = seen_lemmas.get(ent.lemma)
-        #     if existing is None or ent.confidence > existing.confidence:
-        #         seen_lemmas[ent.lemma] = ent
 
-        # return list(seen_lemmas.values())
-    
+            seen_token_indices.update(range(chunk.start, chunk.end))
+
         return entities
 
-    def extract_entities(self, text: str, doc) -> List[Entity]:
-        # doc = self.preprocessor(text) # Dùng pipeline có fastcoref
-        
-        # 1. Chạy NER và Noun Chunks bình thường như code cũ của bạn
-        base_entities = self.extract_base_entities(text, doc) 
-        
-        # Gán UUID mặc định cho mọi entity cơ bản
-        for ent in base_entities:
-            if ent.canonical_id is None:
-                ent.canonical_id = str(uuid.uuid4())
-                
-        # 2. Xử lý Coref Clusters để tạo Alias Entities
-        if doc._.coref_clusters:
-            for cluster in doc._.coref_clusters:
-                # cluster là list các char span: [(start, end), (start, end)...]
-                
-                # Tìm entity gốc (Representative) trong list base_entities
-                # Thường là span đầu tiên trong cluster hoặc span đã được NER nhận diện
+    def _resolve_relative_clauses(self, doc, entities: List[Entity]) -> List[str]:
+        """
+        Với mỗi relative clause, tạo câu mới dạng:
+        "<entity.text> <clause_verb_subtree>."
+        Subject được lookup từ entities_1 thay vì dùng antecedent.text trực tiếp.
+        """
+        generated = []
+        entity_by_lemma = {e.lemma: e for e in entities}
+
+        for token in doc:
+            if token.dep_ != "relcl":
+                continue
+
+            antecedent = token.head
+
+            subj_ent = entity_by_lemma.get(antecedent.lemma_.lower())
+            if subj_ent is None:
+                subj_ent = next((e for e in entities if e.head_noun.lower() == antecedent.lemma_.lower()), None)
+            if subj_ent is None:
+                continue
+
+            rel_pron = next((c for c in token.children if c.lower_ in {"which", "that", "who", "whom"}), None)
+            if rel_pron is None:
+                continue
+
+            subtree_tokens = [t for t in sorted(token.subtree, key=lambda t: t.i) if t != rel_pron]
+            clause = " ".join(t.text for t in subtree_tokens)
+            generated.append(f"{subj_ent.text} {clause}.")
+
+        return generated
+
+    def _resolve_appositions(self, doc, entities: List[Entity]) -> List[str]:
+        """
+        Với mỗi apposition, tạo câu mới dạng:
+        "<head_ent.text> is <appos_ent.text>."
+        Cả head và appos đều được lookup từ entities_1.
+        """
+        generated = []
+        entity_by_lemma = {e.lemma: e for e in entities}
+
+        for token in doc:
+            if token.dep_ != "appos":
+                continue
+
+            head = token.head
+
+            head_ent = entity_by_lemma.get(head.lemma_.lower())
+            if head_ent is None:
+                head_ent = next((e for e in entities if e.head_noun.lower() == head.lemma_.lower()), None)
+            if head_ent is None:
+                continue
+
+            appos_ent = entity_by_lemma.get(token.lemma_.lower())
+            if appos_ent is None:
+                appos_ent = next((e for e in entities if e.head_noun.lower() == token.lemma_.lower()), None)
+            if appos_ent is None:
+                continue
+
+            if head_ent.lemma == appos_ent.lemma:
+                continue
+
+            generated.append(f"{head_ent.text} is {appos_ent.text}.")
+
+        return generated
+
+    def extract_entities(self, text: str, doc=None) -> List[Entity]:
+        """Extract entities and optionally add coreference aliases."""
+        if doc is None:
+            doc = self.preprocess(text)
+
+        base_entities = self.extract_base_entities(text, doc)
+
+        coref_clusters = getattr(getattr(doc, "_", None), "coref_clusters", None)
+        if coref_clusters:
+            for cluster in coref_clusters:
                 rep_span = cluster[0]
                 canonical_id = None
-                
-                # Tìm xem rep_span có khớp với entity nào đã extract không
+
                 for ent in base_entities:
-                    # Kiểm tra overlap hoặc match start/end char
                     if not (rep_span[1] <= ent.start_char or rep_span[0] >= ent.end_char):
                         canonical_id = ent.canonical_id
                         break
-                
-                # Nếu cụm coref này không trúng entity nào, tạo ID mới
+
                 if not canonical_id:
                     canonical_id = str(uuid.uuid4())
-                    
-                # Duyệt qua các mentions còn lại trong cluster (như "he", "it"...)
+
                 for mention_span in cluster[1:]:
-                    # Khôi phục span text
                     mention_text = text[mention_span[0]:mention_span[1]]
-                    
-                    # Bổ sung đại từ này vào danh sách thực thể như một "Alias"
-                    # mang chung canonical_id với entity gốc
                     alias_entity = Entity(
                         text=mention_text,
                         label="COREF_PRON",
                         start_char=mention_span[0],
                         end_char=mention_span[1],
-                        head_noun=mention_text, # Tạm dùng text
+                        head_noun=mention_text,
                         lemma=mention_text.lower(),
                         modifiers=[],
-                        confidence=0.9,
-                        canonical_id=canonical_id # QUAN TRỌNG NHẤT
+                        modifier_summary={},
+                        confidence=0.90,
+                        canonical_id=canonical_id
                     )
                     base_entities.append(alias_entity)
-                    
+
         return base_entities
 
-    def extract_relations(self, text: str, entities: List[Entity], doc=None) -> List[Relation]:
+    def extract_relations(self, text: str, entities: List[Entity] = None, doc=None) -> List[Relation]:
         """
         Trích xuất quan hệ DỰA TRÊN danh sách thực thể đã chốt (Entity-driven).
         Chỉ tạo quan hệ nếu Subject và Object khớp với các Entity hợp lệ.
         """
-            
+        if doc is None:
+            doc = self.preprocess(text)
+
+        if entities is None:
+            entities = self.extract_entities(text, doc)
+
         relations = []
         
         # BƯỚC 1: XÂY DỰNG TỪ ĐIỂN MAPPING TOKEN -> ENTITY
@@ -379,21 +434,42 @@ class InformationExtractor:
                 return token.text
         return span.text  # Fallback to full span if no noun found
     
-    def _extract_modifiers(self, span) -> List[str]:
+    def _extract_modifiers(self, span) -> List[Modifier]:
         """
-        Extract modifier words (adjectives, adverbs) from a span.
+        Extract comprehensive modifiers from a span with hierarchical support.
+        
+        Uses ModifierExtractor to detect:
+        - Adjectives, Noun Adjuncts, Possessives, Participles
+        - Quantifiers, Negations, Temporal expressions
+        - Prepositional Phrases, Relative Clauses, Appositives
+        - Hierarchical modifier relationships (e.g., "highly efficient")
         
         Args:
-            span: spaCy Span object
+            span: spaCy Span object (noun chunk or entity)
             
         Returns:
-            List of modifier tokens
+            List of Modifier objects with nested hierarchical structure
         """
-        modifiers = []
-        for token in span:
-            if token.pos_ in ["ADJ", "ADV", "NOUN"] and token.text != span.root.text:
-                modifiers.append(token.text)
-        return modifiers
+        return self.modifier_extractor.extract_all_modifiers(span, span.root)
+
+    def _modifier_to_dict(self, modifier: Modifier) -> Dict[str, Any]:
+        """Convert a Modifier object into a JSON-serializable dictionary."""
+        return modifier.to_dict()
+
+    def _entity_to_dict(self, entity: Entity) -> Dict[str, Any]:
+        """Convert an Entity object into a JSON-serializable dictionary."""
+        return {
+            "text": entity.text,
+            "label": entity.label,
+            "start_char": entity.start_char,
+            "end_char": entity.end_char,
+            "head_noun": entity.head_noun,
+            "lemma": entity.lemma,
+            "modifiers": [self._modifier_to_dict(mod) for mod in entity.modifiers],
+            "modifier_summary": entity.modifier_summary,
+            "confidence": entity.confidence,
+            "canonical_id": entity.canonical_id,
+        }
     
     def filter_entities_by_relations(self, entities: List[Entity], relations: List[Relation]) -> List[Entity]:
         # Lấy tất cả canonical_id xuất hiện trong relation
@@ -423,7 +499,7 @@ class InformationExtractor:
             Dictionary containing extracted entities, relations, and chunks
         """
 
-        doc = self.preprocessor(text)
+        doc = self.preprocess(text)
 
         entities = self.extract_entities(text, doc)
         relations = self.extract_relations(text, entities, doc)
@@ -431,6 +507,6 @@ class InformationExtractor:
         filter_entities = self.filter_entities_by_relations(entities, relations)
         return {
             "text": text,
-            "entities": [asdict(e) for e in filter_entities],
+            "entities": [self._entity_to_dict(e) for e in filter_entities],
             "relations": [asdict(r) for r in relations],
         }
