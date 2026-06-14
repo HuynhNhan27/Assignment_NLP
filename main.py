@@ -48,8 +48,8 @@ class TextToKnowledgeGraphPipeline:
         # self.entity_normalizer = EntityNormalizer()
         
         # # Stage 3: Ontology & Hierarchy
-        # print("[INIT] Loading Ontology Resolver (WordNet)...")
-        # self.ontology = OntologyResolver()
+        print("[INIT] Loading Ontology Resolver (WordNet)...")
+        self.ontology_resolver = OntologyResolver()
         
         # # Stage 4: Graph Construction
         # print("[INIT] Initializing Graph Constructor (NetworkX)...")
@@ -80,6 +80,7 @@ class TextToKnowledgeGraphPipeline:
             print(f"      head_noun: {entity['head_noun']}")
             print(f"      modifiers: {entity['modifiers']}")
             print(f"      id: {entity['canonical_id']}")
+            print(f"      end_char: {entity['end_char']}")
 
         print(f"  - Relations found: {len(extraction_result['relations'])}")
         for rel in extraction_result['relations']:
@@ -129,7 +130,7 @@ class TextToKnowledgeGraphPipeline:
         }
     
     def stage_3_ontology_resolution(self, extraction_result: Dict[str, Any], 
-                                    normalization_result: Dict[str, Any]) -> Dict[str, Any]:
+                                    wsd_result: Dict[str, Any]) -> Dict[str, Any]:
         """
         Stage 3: Resolve hierarchy and build ontology.
         
@@ -142,33 +143,18 @@ class TextToKnowledgeGraphPipeline:
         """
         print("\n[STAGE 3] Ontology & Hierarchy Resolution")
         
-        # Get relations and normalize predicates
-        relations = extraction_result['relations']
-        
-        print(f"  - Processing {len(relations)} relations")
-        normalized_relations = []
-        for rel in relations:
-            normalized_pred = self.ontology.normalize_predicate(rel['predicate'])
-            normalized_relations.append({
-                "subject": rel['subject'],
-                "predicate": normalized_pred,
-                "object": rel['obj']
-            })
-            print(f"    * {rel['subject']} --[{normalized_pred}]--> {rel['obj']}")
-        
-        # Build hierarchy for example entities
-        hierarchies = {}
-        for entity in list(set([e['text'] for e in extraction_result['entities']]))[:2]:
-            hierarchy = self.ontology.build_hierarchy_graph(entity, depth=3)
-            hierarchies[entity] = hierarchy
-            if hierarchy.get('hierarchy'):
-                print(f"  - Hierarchy for '{entity}':")
-                for h in hierarchy['hierarchy'][:2]:
-                    print(f"    * {h['text']} (level {h['level']}): {h['definition'][:50]}...")
+        final_kg = self.ontology_resolver.resolve(extraction_result["entities"], wsd_result["disambiguated"], extraction_result["relations"])
+
+        print(f"  - Ontology Entities: {len(final_kg['nodes'])} entities")
+        for n in final_kg['nodes']:
+            print(f"    * {n['id']} : {n['label']}")
+
+        print(f"  - Ontology Relations: {len(final_kg['relations'])} relations")
+        for rel in final_kg['relations']:
+            print(f"(ID relation:   * {rel['subject']} --[{rel['predicate']}]--> {rel['obj']})")
         
         return {
-            "normalized_relations": normalized_relations,
-            "hierarchies": hierarchies
+            "kg": final_kg,
         }
     
     def stage_4_graph_construction(self, 
@@ -290,7 +276,7 @@ class TextToKnowledgeGraphPipeline:
         # Execute all stages
         stage1_result = self.stage_1_information_extraction(text)
         stage2_result = self.stage_2_wsd_and_normalization(stage1_result)
-        # stage3_result = self.stage_3_ontology_resolution(stage1_result, stage2_result)
+        stage3_result = self.stage_3_ontology_resolution(stage1_result, stage2_result)
         # graph = self.stage_4_graph_construction(stage1_result, stage2_result, stage3_result)
         # self.stage_5_export(graph, output_path)
         
@@ -329,7 +315,7 @@ Cattle are large artiodactyls, mammals with cloven hooves, meaning that they wal
     """
 
     sample_test = """
-    Cows are herbivorous mammals that eat grass in meadows
+    John is eating an apple. Tom is eating a banana.
     """
 
     # Cows are herbivorous mammals that eat grass in meadows
