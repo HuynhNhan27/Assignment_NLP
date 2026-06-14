@@ -19,6 +19,7 @@ from nltk.stem import WordNetLemmatizer
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+from collections import defaultdict
 
 @dataclass
 class OntologyNode:
@@ -49,11 +50,11 @@ class HierarchyNode:
     level: int  # Distance from original entity
 
 
-class OntologyHierarchyResolver:
+class OntologyResolver:
     """
     Builds hierarchical structures and deduplicates relations for an LPG Knowledge Graph.
     """
-    def __init__(self, embedding_model: str = "all-MiniLM-L6-v2", sim_threshold: float = 0.85, max_hypernym_depth: int = 1, max_hypernyms_per_node: int = 5):
+    def __init__(self, embedding_model: str = "all-MiniLM-L6-v2", sim_threshold: float = 0.85, max_hypernym_depth: int = 3, max_hypernyms_per_node: int = 5):
         self.embedder = SentenceTransformer(embedding_model)
         self.sim_threshold = sim_threshold
         self.max_hypernym_depth = max_hypernym_depth
@@ -79,112 +80,142 @@ class OntologyHierarchyResolver:
                     antonyms.add(ant.name().lower().replace("_", " "))
         return antonyms
 
+
     def build_hierarchy(self, raw_entities: List[Dict], wsd_entities: List[Dict]) -> Tuple[List[OntologyNode], List[OntologyRelation]]:
         """
-        Xây dựng phân cấp Ontology từ WordNet và Head Nouns.
+        Xây dựng phân cấp Ontology sử dụng Graph Path Compression.
+        Chỉ giữ lại các Category là 'điểm giao cắt' (Branching Points) thực sự.
         """
-        nodes: Dict[str, OntologyNode] = {}
-        relations: List[OntologyRelation] = []
+        temp_nodes: Dict[str, OntologyNode] = {}
+        adj_up = defaultdict(set)    # node -> các cha của nó
+        adj_down = defaultdict(set)  # node -> các con của nó
         
-        # 1. Map WSD entities theo canonical_id để dễ truy xuất
         wsd_map = {ent['canonical_id']: ent for ent in wsd_entities if 'canonical_id' in ent}
-        
-        # 2. Xử lý từng entity gốc
         seen_canonical = set()
+        entities_ids = set()
         
+        # ==========================================
+        # BƯỚC 1: XÂY DỰNG ĐỒ THỊ NHÁP (Đầy đủ độ sâu)
+        # ==========================================
         for raw_ent in raw_entities:
             c_id = raw_ent['canonical_id']
-            if c_id in seen_canonical:
-                continue
+            if c_id in seen_canonical: continue
             seen_canonical.add(c_id)
+            entities_ids.add(c_id)
             
-            # Tạo Node gốc cho Entity hiện tại
-            nodes[c_id] = OntologyNode(
-                id=c_id,
-                label=raw_ent['text'],
-                node_type="ENTITY",
+            temp_nodes[c_id] = OntologyNode(
+                id=c_id, label=raw_ent['text'], node_type="ENTITY",
                 properties={"confidence": raw_ent.get('confidence', 1.0)}
             )
             
             wsd_data = wsd_map.get(c_id)
             
             if wsd_data:
-                # --- TRƯỜNG HỢP CÓ TRONG WORDNET ---
-                # Lấy synset từ tên (text của wsd_data đang lưu dạng dog.n.01)
                 try:
                     synset = wn.synset(wsd_data['text'])
-
                     queue = [(synset, c_id, 0)]
-                    visited_synsets = set() # Tránh lặp vòng nếu WordNet có cycle (hiếm nhưng an toàn)
-
+                    visited_synsets = set()
+                    
                     while queue:
                         curr_syn, curr_id, depth = queue.pop(0)
-                        if depth >= self.max_hypernym_depth or curr_syn in visited_synsets:
-                            continue
-
-                        all_hypernyms = curr_syn.hypernyms()
-                        selected_hypernyms = all_hypernyms[:self.max_hypernyms_per_node]
-
+                        
+                        if depth >= self.max_hypernym_depth: continue
+                        if curr_syn in visited_synsets: continue
+                        visited_synsets.add(curr_syn)
+                        
+                        selected_hypernyms = curr_syn.hypernyms()[:self.max_hypernyms_per_node]
+                        
                         for parent_syn in selected_hypernyms:
                             parent_label = parent_syn.lemmas()[0].name().replace("_", " ")
                             parent_id = self._get_category_id(parent_label)
                             
-                            if parent_id not in nodes:
-                                nodes[parent_id] = OntologyNode(
+                            if parent_id not in temp_nodes:
+                                temp_nodes[parent_id] = OntologyNode(
                                     id=parent_id, label=parent_label, node_type="CATEGORY", properties={"source": "wordnet"}
                                 )
                                 
-                            relations.append(OntologyRelation(
-                                subject=curr_id, predicate="is_a", obj=parent_id, confidence=1.0, source_sentence="WordNet Ontology"
-                            ))
+                            # Lưu vào danh sách kề (Adjacency List)
+                            adj_up[curr_id].add(parent_id)
+                            adj_down[parent_id].add(curr_id)
                             
-                            # Đẩy node cha vào queue để tiếp tục đào sâu (nếu depth chưa max)
                             queue.append((parent_syn, parent_id, depth + 1))
                 except Exception:
-                    pass # Fallback nếu format synset có vấn đề
+                    pass
             else:
-                # --- TRƯỜNG HỢP OOV (OUT OF VOCABULARY) ---
-                # Sử dụng head_noun làm Category nhân tạo
+                # OOV Fallback
                 head_noun = raw_ent.get('head_noun', '').lower()
                 text_lower = raw_ent['text'].lower()
-                
-                # Chỉ tạo Category nếu head_noun khác hoàn toàn với text 
-                # (VD: "Convolutional Neural Network" -> "network")
                 if head_noun and head_noun != text_lower and head_noun in text_lower:
                     parent_id = self._get_category_id(head_noun)
-                    
-                    if parent_id not in nodes:
-                        nodes[parent_id] = OntologyNode(
-                            id=parent_id,
-                            label=head_noun,
-                            node_type="CATEGORY",
-                            properties={"source": "syntax_head_noun"}
+                    if parent_id not in temp_nodes:
+                        temp_nodes[parent_id] = OntologyNode(
+                            id=parent_id, label=head_noun, node_type="CATEGORY", properties={"source": "syntax_head_noun"}
                         )
-                        
-                    relations.append(OntologyRelation(
-                        subject=c_id,
-                        predicate="is_a",
-                        obj=parent_id,
-                        confidence=0.8, # Thấp hơn WordNet một chút
-                        source_sentence="Syntactic Analysis"
+                    adj_up[c_id].add(parent_id)
+                    adj_down[parent_id].add(c_id)
+
+        # ==========================================
+        # BƯỚC 2: TÌM TẬP HỢP LEAVES (ENTITIES GỐC) CHO TỪNG NODE
+        # ==========================================
+        leaves = defaultdict(set)
+        for ent_id in entities_ids:
+            queue = [ent_id]
+            visited = set()
+            while queue:
+                curr = queue.pop(0)
+                if curr in visited: continue
+                visited.add(curr)
+                leaves[curr].add(ent_id) # Node hiện tại cover được Entity gốc này
+                queue.extend(adj_up[curr])
+
+        # ==========================================
+        # BƯỚC 3: LỌC CÁC ĐIỂM GIAO CẮT (BRANCHING POINTS)
+        # ==========================================
+        kept_nodes_ids = set(entities_ids) # Luôn giữ Entity
+        
+        for nid, node in temp_nodes.items():
+            if node.node_type == "CATEGORY":
+                # Điều kiện 1: Phải chứa từ 2 Entities gốc trở lên
+                if len(leaves[nid]) >= 2:
+                    has_absorbing_child = False
+                    # Điều kiện 2: Kiểm tra xem có node con nào có tập Entities y hệt không
+                    for child_id in adj_down[nid]:
+                        if leaves[child_id] == leaves[nid]:
+                            has_absorbing_child = True
+                            break
+                            
+                    # Chỉ giữ lại nếu nó là điểm gộp nhánh thực sự
+                    if not has_absorbing_child:
+                        kept_nodes_ids.add(nid)
+
+        # ==========================================
+        # BƯỚC 4: PATH COMPRESSION (NỐI TẮT ĐỒ THỊ)
+        # ==========================================
+        final_nodes = [temp_nodes[nid] for nid in kept_nodes_ids]
+        final_relations = []
+        
+        for start_node in kept_nodes_ids:
+            visited = set([start_node])
+            queue = list(adj_up[start_node])
+            
+            while queue:
+                curr = queue.pop(0)
+                if curr in visited: continue
+                visited.add(curr)
+                
+                # Nếu tìm thấy một node cha (hoặc tổ tiên) được giữ lại
+                if curr in kept_nodes_ids:
+                    final_relations.append(OntologyRelation(
+                        subject=start_node, predicate="is_a", obj=curr, 
+                        confidence=1.0, source_sentence="Compressed Hierarchy"
                     ))
+                    # Tìm thấy rồi thì DỪNG hướng này, không leo lên trên ông nội nữa 
+                    # để giữ đúng phân cấp tầng bậc.
+                else:
+                    # Nếu node trung gian này bị xóa, tiếp tục leo lên trên để tìm tổ tiên
+                    queue.extend(adj_up[curr])
 
-        # # BƯỚC 2: PRUNING (CẮT TỈA CÁC CATEGORY < 2 CON)
-        # # Đếm số lượng node con (subject) trỏ vào mỗi category (obj)
-        # category_child_count = {}
-        # for rel in relations:
-        #     if rel.predicate == "is_a":
-        #         category_child_count[rel.obj] = category_child_count.get(rel.obj, 0) + 1
-
-        # # Tìm các Category hợp lệ (>= 2 con)
-        # valid_categories = {cat_id for cat_id, count in category_child_count.items() if count >= 2}
-
-        # # Lọc Nodes và Relations
-        # final_nodes = [n for nid, n in nodes.items() if n.node_type == "ENTITY" or nid in valid_categories]
-        # final_relations = [r for r in relations if r.predicate != "is_a" or r.obj in valid_categories]
-
-        # return final_nodes, final_relations
-        return [n for n in nodes.values()], relations
+        return final_nodes, final_relations
 
     def deduplicate_relations(self, extracted_relations: List[Dict]) -> List[OntologyRelation]:
         """
@@ -271,226 +302,3 @@ class OntologyHierarchyResolver:
             "nodes": [asdict(n) for n in nodes],
             "relations": [asdict(r) for r in all_relations]
         }
-
-
-
-
-class OntologyResolver:
-    """
-    Resolve entities to their ontology hierarchy using WordNet.
-    
-    Features:
-    - Hypernym chain extraction
-    - Finding least common hypernym
-    - Building concept hierarchies
-    - Predicate lemmatization
-    """
-    
-    def __init__(self):
-        """Initialize Ontology Resolver."""
-        self.lemmatizer = WordNetLemmatizer()
-    
-    def get_synset(self, word: str, pos: Optional[str] = None):
-        """
-        Get the most common synset for a word.
-        
-        Args:
-            word: Word to get synset for
-            pos: Part of speech (optional)
-            
-        Returns:
-            WordNet synset or None
-        """
-        synsets = wn.synsets(word, pos=pos)
-        if synsets:
-            return synsets[0]  # Return most common
-        return None
-    
-    def get_hypernyms(self, word: str, depth: int = 5) -> List[HierarchyNode]:
-        """
-        Get hypernym chain for a word (walking up the hierarchy).
-        
-        Example: "cow" -> "animal" -> "organism" -> "living_thing" -> "entity"
-        
-        Args:
-            word: Word to trace upward
-            depth: Maximum depth to traverse
-            
-        Returns:
-            List of HierarchyNode objects in ascending order
-        """
-        synset = self.get_synset(word)
-        if not synset:
-            return []
-        
-        hierarchy = []
-        current = synset
-        level = 0
-        visited = set()
-        
-        while current and level < depth:
-            if current.name() in visited:
-                break
-            
-            visited.add(current.name())
-            
-            # Get hypernyms
-            hypernyms = [h.name() for h in current.hypernyms()]
-            hyponyms = [h.name() for h in current.hyponyms()[:5]]  # Limit hyponyms
-            
-            node = HierarchyNode(
-                text=current.name().split('.')[0].replace('_', ' '),
-                synset=current.name(),
-                hypernyms=hypernyms,
-                hyponyms=hyponyms,
-                definition=current.definition(),
-                level=level
-            )
-            hierarchy.append(node)
-            
-            # Move to first hypernym
-            hypernym_list = current.hypernyms()
-            current = hypernym_list[0] if hypernym_list else None
-            level += 1
-        
-        return hierarchy
-    
-    def get_common_hypernym(self, word1: str, word2: str) -> Optional[HierarchyNode]:
-        """
-        Find the least common hypernym (LCH) between two words.
-        
-        Example: "cow" and "sheep" -> both have "animal" as LCH
-        
-        Args:
-            word1: First word
-            word2: Second word
-            
-        Returns:
-            HierarchyNode representing the common hypernym, or None
-        """
-        synset1 = self.get_synset(word1)
-        synset2 = self.get_synset(word2)
-        
-        if not synset1 or not synset2:
-            return None
-        
-        # Get lowest common hypernym
-        lch = synset1.lowest_common_hypernyms(synset2)
-        if not lch:
-            return None
-        
-        lch_synset = lch[0]
-        return HierarchyNode(
-            text=lch_synset.name().split('.')[0].replace('_', ' '),
-            synset=lch_synset.name(),
-            hypernyms=[h.name() for h in lch_synset.hypernyms()],
-            hyponyms=[h.name() for h in lch_synset.hyponyms()[:5]],
-            definition=lch_synset.definition(),
-            level=0
-        )
-    
-    def normalize_predicate(self, predicate: str) -> str:
-        """
-        Normalize predicate (edge label) through lemmatization.
-        
-        Examples:
-        - "eats" -> "eat"
-        - "consuming" -> "consume"
-        - "feeds on" -> "feed on"
-        
-        Args:
-            predicate: Predicate/relation text
-            
-        Returns:
-            Lemmatized predicate
-        """
-        # Tokenize and get POS tags
-        tokens = word_tokenize(predicate)
-        pos_tags = pos_tag(tokens)
-        
-        lemmatized = []
-        for token, pos in pos_tags:
-            if pos.startswith('VB'):  # Verb
-                lemma = self.lemmatizer.lemmatize(token, pos='v')
-            elif pos.startswith('NN'):  # Noun
-                lemma = self.lemmatizer.lemmatize(token, pos='n')
-            elif pos.startswith('JJ'):  # Adjective
-                lemma = self.lemmatizer.lemmatize(token, pos='a')
-            else:
-                lemma = token
-            lemmatized.append(lemma)
-        
-        return ' '.join(lemmatized)
-    
-    def build_hierarchy_graph(self, word: str, depth: int = 3) -> Dict[str, Dict]:
-        """
-        Build a hierarchy graph for a word.
-        
-        Returns a nested dictionary structure representing the hierarchy.
-        
-        Args:
-            word: Root word
-            depth: Maximum depth
-            
-        Returns:
-            Dictionary representing the hierarchy
-        """
-        hierarchy = self.get_hypernyms(word, depth=depth)
-        
-        if not hierarchy:
-            return {"word": word, "found": False}
-        
-        graph = {
-            "word": word,
-            "hierarchy": []
-        }
-        
-        for node in hierarchy:
-            graph["hierarchy"].append({
-                "text": node.text,
-                "synset": node.synset,
-                "definition": node.definition,
-                "level": node.level,
-                "hypernyms": node.hypernyms,
-                "hyponyms": node.hyponyms
-            })
-        
-        return graph
-    
-    def find_shared_hypernym(self, entities: List[str]) -> Optional[str]:
-        """
-        Find a shared hypernym among multiple entities.
-        
-        Useful for merging similar entities in the graph.
-        
-        Example: ["grass", "leaves", "flowers"] -> "plant"
-        
-        Args:
-            entities: List of entity texts
-            
-        Returns:
-            Shared hypernym or None
-        """
-        if not entities:
-            return None
-        
-        if len(entities) == 1:
-            synset = self.get_synset(entities[0])
-            return synset.name().split('.')[0].replace('_', ' ') if synset else None
-        
-        # Get hypernyms for all entities
-        all_hypernyms = []
-        for entity in entities:
-            synset = self.get_synset(entity)
-            if synset:
-                hypernyms = [h.name().split('.')[0].replace('_', ' ') 
-                            for h in synset.hypernyms()]
-                all_hypernyms.append(set(hypernyms))
-        
-        if not all_hypernyms:
-            return None
-        
-        # Find intersection (shared hypernyms)
-        shared = set.intersection(*all_hypernyms) if all_hypernyms else set()
-        
-        return list(shared)[0] if shared else None

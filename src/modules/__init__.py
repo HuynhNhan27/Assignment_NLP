@@ -10,7 +10,7 @@ Modular components for:
 
 from .information_extraction import InformationExtractor
 from .wsd_normalization import WordSenseDisambiguator, EntityNormalizer
-from .ontology_hierarchy import OntologyResolver, OntologyHierarchyResolver
+from .ontology_hierarchy import OntologyResolver
 from .graph_construction import GraphConstructor
 
 __all__ = [
@@ -18,6 +18,5 @@ __all__ = [
     'WordSenseDisambiguator',
     'EntityNormalizer',
     'OntologyResolver',
-    'OntologyHierarchyResolver',
     'GraphConstructor',
 ]
