@@ -136,13 +136,13 @@ class TextToKnowledgeGraphPipeline:
         entities = extraction_result['entities']
         
         # Extract unique entities
-        entities_text = [e['text'] for e in extraction_result['entities']]
-        entity_map = self.entity_normalizer.normalize_entities(entities_text)
+        # entities_text = [e['text'] for e in extraction_result['entities']]
+        # entity_map = self.entity_normalizer.normalize_entities(entities_text)
 
-        print(f"  - Normalized entities: {len(entity_map)}")
-        for original, canonical in list(entity_map.items())[:5]:
-            if original != canonical:
-                print(f"    * {original} -> {canonical}")
+        # print(f"  - Normalized entities: {len(entity_map)}")
+        # for original, canonical in list(entity_map.items())[:5]:
+        #     if original != canonical:
+        #         print(f"    * {original} -> {canonical}")
         
         # Disambiguate
         disambiguated_entities = self.wsd.disambiguate(text, entities)
@@ -152,10 +152,7 @@ class TextToKnowledgeGraphPipeline:
             print(f"    * {d['text']} -> {d['definition']} (conf: {d['confidence']:.2f})")
             print(f"       ID: {d['canonical_id']}")
         
-        return {
-            "entity_map": entity_map,
-            "disambiguated": disambiguated_entities
-        }
+        return disambiguated_entities
     
     def stage_3_ontology_resolution(self, extraction_result: Dict[str, Any], 
                                     wsd_result: Dict[str, Any]) -> Dict[str, Any]:

@@ -115,7 +115,7 @@ class GraphConstructor:
         # 1. Map WSD data theo canonical_id để tra cứu nhanh (O(1))
         wsd_map = {}
         if wsd_data:
-            for wsd_ent in wsd_data.get("disambiguated"):
+            for wsd_ent in wsd_data:
                 c_id = wsd_ent.get('canonical_id')
                 if c_id:
                     wsd_map[c_id] = {
