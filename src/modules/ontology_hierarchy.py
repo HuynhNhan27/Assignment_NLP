@@ -90,7 +90,7 @@ class OntologyResolver:
         adj_up = defaultdict(set)    # node -> các cha của nó
         adj_down = defaultdict(set)  # node -> các con của nó
         
-        wsd_map = {ent['canonical_id']: ent for ent in wsd_entities if 'canonical_id' in ent}
+        wsd_map = {ent['canonical_id']: ent for ent in wsd_entities.get('disambiguated') if 'canonical_id' in ent}
         seen_canonical = set()
         entities_ids = set()
         

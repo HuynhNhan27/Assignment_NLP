@@ -136,13 +136,13 @@ class TextToKnowledgeGraphPipeline:
         entities = extraction_result['entities']
         
         # Extract unique entities
-        # entities_text = [e['text'] for e in extraction_result['entities']]
-        # entity_map = self.entity_normalizer.normalize_entities(entities_text)
+        entities_text = [e['text'] for e in extraction_result['entities']]
+        entity_map = self.entity_normalizer.normalize_entities(entities_text)
 
-        # print(f"  - Normalized entities: {len(entity_map)}")
-        # for original, canonical in list(entity_map.items())[:5]:
-        #     if original != canonical:
-        #         print(f"    * {original} -> {canonical}")
+        print(f"  - Normalized entities: {len(entity_map)}")
+        for original, canonical in list(entity_map.items())[:5]:
+            if original != canonical:
+                print(f"    * {original} -> {canonical}")
         
         # Disambiguate
         disambiguated_entities = self.wsd.disambiguate(text, entities)
@@ -152,7 +152,10 @@ class TextToKnowledgeGraphPipeline:
             print(f"    * {d['text']} -> {d['definition']} (conf: {d['confidence']:.2f})")
             print(f"       ID: {d['canonical_id']}")
         
-        return disambiguated_entities
+        return {
+            "entity_map": entity_map,
+            "disambiguated": disambiguated_entities
+        }
     
     def stage_3_ontology_resolution(self, extraction_result: Dict[str, Any], 
                                     wsd_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -161,7 +164,7 @@ class TextToKnowledgeGraphPipeline:
         
         Args:
             extraction_result: Result from Stage 1
-            normalization_result: Result from Stage 2
+            wsd_result: Result from Stage 2
             
         Returns:
             Dictionary with hierarchy information
@@ -189,7 +192,7 @@ class TextToKnowledgeGraphPipeline:
         
         Args:
             extraction_result: From Stage 1
-            normalization_result: From Stage 2
+            wsd_result: From Stage 2
             ontology_result: From Stage 3
             
         Returns:
@@ -199,7 +202,7 @@ class TextToKnowledgeGraphPipeline:
         
         # # Get entities from Stage 1 (now includes noun chunks)
         # entities = list(set([e['text'] for e in extraction_result['entities']]))
-        # entity_map = normalization_result.get('entity_map')
+        # entity_map = wsd_result.get('entity_map')
         # if entity_map is None:
         #     entity_map = self.entity_normalizer.normalize_entities(entities)
         
