@@ -1,16 +1,17 @@
 """
-Graph Construction Module
+Graph Construction Module (Upgraded)
 
 Handles:
-- Building in-memory Labeled Property Graph (LPG)
-- Node and edge management with metadata
+- Building in-memory Labeled Property Graph (LPG) from pipeline outputs
+- Node and edge management using Canonical UUIDs
+- Metadata enrichment from WSD stage
 - JSON serialization for frontend
 - Graph statistics and analysis
 
-Tool: NetworkX (or plain Python dict)
+Tool: NetworkX
 """
 
-from typing import List, Dict, Any, Set, Tuple, Optional
+from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 import json
 import networkx as nx
@@ -20,35 +21,24 @@ from collections import defaultdict
 @dataclass
 class GraphNode:
     """Represents a node in the Knowledge Graph."""
-    id: str
+    id: str  # canonical_id (UUID)
     label: str
-    node_type: str  # "entity", "concept", "relation"
-    properties: Dict[str, Any]  # metadata like definition, confidence, source
-    hypernyms: List[str] = None
-    
-    def __post_init__(self):
-        if self.hypernyms is None:
-            self.hypernyms = []
+    node_type: str  # "ENTITY", "CATEGORY", v.v.
+    properties: Dict[str, Any]  # definition, confidence, synset_id, v.v.
 
 
 @dataclass
 class GraphEdge:
     """Represents an edge in the Knowledge Graph."""
-    source: str
-    target: str
-    relation_type: str  # e.g., "eats", "is_a", "part_of"
-    properties: Dict[str, Any]  # confidence, source_sentence, etc.
+    source: str      # subject UUID
+    target: str      # object UUID
+    relation_type: str  # predicate
+    properties: Dict[str, Any]  # confidence, source_sentence, v.v.
 
 
 class GraphConstructor:
     """
-    Construct and manage a Labeled Property Graph (LPG).
-    
-    Features:
-    - Node and edge creation with metadata
-    - Automatic deduplication
-    - JSON export for frontend visualization
-    - Graph statistics
+    Construct and manage a Labeled Property Graph (LPG) based on pipeline outputs.
     """
     
     def __init__(self):
@@ -56,41 +46,26 @@ class GraphConstructor:
         self.graph = nx.DiGraph()
         self.nodes: Dict[str, GraphNode] = {}
         self.edges: List[GraphEdge] = []
-        self.node_counter = 0
     
-    def add_node(self, label: str, node_type: str = "entity", 
-                 properties: Dict[str, Any] = None, 
-                 hypernyms: List[str] = None) -> str:
+    def add_node(self, node_id: str, label: str, node_type: str, properties: Dict[str, Any] = None) -> str:
         """
-        Add a node to the graph.
-        
-        Args:
-            label: Node label/name
-            node_type: Type of node (entity, concept, relation)
-            properties: Dictionary of node metadata
-            hypernyms: List of hypernym IDs
-            
-        Returns:
-            Node ID
+        Add a node to the graph using a pre-defined ID.
         """
-        # Check if node already exists (by label)
-        for node_id, node in self.nodes.items():
-            if node.label.lower() == label.lower():
-                return node_id
-        
-        # Create new node
-        node_id = f"node_{self.node_counter}"
-        self.node_counter += 1
+        if node_id in self.nodes:
+            # Cập nhật properties nếu node đã tồn tại (để đảm bảo không mất data)
+            if properties:
+                self.nodes[node_id].properties.update(properties)
+                self.graph.nodes[node_id].update(properties)
+            return node_id
         
         if properties is None:
             properties = {}
-        
+            
         node = GraphNode(
             id=node_id,
             label=label,
             node_type=node_type,
-            properties=properties,
-            hypernyms=hypernyms or []
+            properties=properties
         )
         
         self.nodes[node_id] = node
@@ -98,30 +73,24 @@ class GraphConstructor:
         
         return node_id
     
-    def add_edge(self, source_id: str, target_id: str, 
-                 relation_type: str, properties: Dict[str, Any] = None) -> bool:
+    def add_edge(self, source_id: str, target_id: str, relation_type: str, properties: Dict[str, Any] = None) -> bool:
         """
-        Add an edge between two nodes.
-        
-        Args:
-            source_id: Source node ID
-            target_id: Target node ID
-            relation_type: Type of relation (e.g., "eats", "is_a")
-            properties: Edge metadata
-            
-        Returns:
-            True if edge was added, False if already exists
+        Add an edge between two existing nodes.
         """
+        # Bỏ qua nếu 1 trong 2 node không tồn tại trong Graph
         if source_id not in self.nodes or target_id not in self.nodes:
             return False
-        
-        # Check if edge already exists
-        if self.graph.has_edge(source_id, target_id):
-            return False
-        
+            
         if properties is None:
             properties = {}
-        
+            
+        # Tránh thêm edge trùng lặp hoàn toàn
+        for existing_edge in self.edges:
+            if (existing_edge.source == source_id and 
+                existing_edge.target == target_id and 
+                existing_edge.relation_type == relation_type):
+                return False
+                
         edge = GraphEdge(
             source=source_id,
             target=target_id,
@@ -130,157 +99,96 @@ class GraphConstructor:
         )
         
         self.edges.append(edge)
-        self.graph.add_edge(source_id, target_id, 
-                           relation_type=relation_type, 
-                           **properties)
+        self.graph.add_edge(source_id, target_id, relation_type=relation_type, **properties)
         
         return True
-    
-    def add_hierarchy_edge(self, child_id: str, parent_id: str,
-                          confidence: float = 1.0) -> bool:
+
+    def build_from_pipeline(self, ontology_data: Dict[str, Any], wsd_data: Optional[List[Dict]] = None) -> None:
         """
-        Add a hierarchy edge (is-a relationship).
+        Xây dựng Graph trực tiếp từ output của Stage 3 (Ontology) và Stage 2 (WSD).
         
         Args:
-            child_id: Child concept ID
-            parent_id: Parent concept ID
-            confidence: Confidence score
-            
-        Returns:
-            True if edge was added
+            ontology_data: Output từ OntologyResolver.resolve() 
+                           ({"nodes": [...], "relations": [...]})
+            wsd_data: Output từ WordSenseDisambiguator.disambiguate()
         """
-        return self.add_edge(
-            child_id, parent_id,
-            relation_type="is_a",
-            properties={"confidence": confidence}
-        )
-    
-    def merge_nodes(self, node_ids: List[str], new_label: str) -> Optional[str]:
-        """
-        Merge multiple nodes into a single node (e.g., shared hypernym).
-        
-        Redirects all edges from merged nodes to the new node.
-        
-        Args:
-            node_ids: List of node IDs to merge
-            new_label: Label for the merged node
+        # 1. Map WSD data theo canonical_id để tra cứu nhanh (O(1))
+        wsd_map = {}
+        if wsd_data:
+            for wsd_ent in wsd_data:
+                c_id = wsd_ent.get('canonical_id')
+                if c_id:
+                    wsd_map[c_id] = {
+                        "definition": wsd_ent.get("definition"),
+                        "synset_id": wsd_ent.get("synset_id"),
+                        "wsd_confidence": wsd_ent.get("confidence")
+                    }
+
+        # 2. Xây dựng Nodes từ Ontology data
+        for node_data in ontology_data.get("nodes", []):
+            node_id = node_data["id"]
+            properties = node_data.get("properties", {}).copy()
             
-        Returns:
-            ID of new merged node, or None if failed
-        """
-        if not node_ids:
-            return None
-        
-        # Create new merged node
-        merged_id = self.add_node(new_label, node_type="concept")
-        
-        # Redirect edges
-        for node_id in node_ids:
-            if node_id not in self.nodes:
-                continue
+            # Enrich thêm dữ liệu từ WSD nếu node này là Entity (có trong wsd_map)
+            if node_id in wsd_map:
+                properties.update(wsd_map[node_id])
+                
+            self.add_node(
+                node_id=node_id,
+                label=node_data["label"],
+                node_type=node_data["node_type"],
+                properties=properties
+            )
+
+        # 3. Xây dựng Edges từ Ontology data
+        for rel_data in ontology_data.get("relations", []):
+            properties = {
+                "confidence": rel_data.get("confidence", 1.0),
+                "source_sentence": rel_data.get("source_sentence", "")
+            }
             
-            # Redirect incoming edges
-            for pred in list(self.graph.predecessors(node_id)):
-                if pred != merged_id:
-                    self.add_edge(pred, merged_id, 
-                                 relation_type="is_a")
+            self.add_edge(
+                source_id=rel_data["subject"],
+                target_id=rel_data["obj"],
+                relation_type=rel_data["predicate"],
+                properties=properties
+            )
             
-            # Remove old node
-            self.graph.remove_node(node_id)
-            del self.nodes[node_id]
-        
-        return merged_id
-    
     def get_statistics(self) -> Dict[str, Any]:
-        """
-        Get graph statistics.
-        
-        Returns:
-            Dictionary with graph metrics
-        """
+        """Lấy các chỉ số thống kê của đồ thị."""
         return {
             "num_nodes": len(self.nodes),
             "num_edges": len(self.edges),
             "node_types": self._count_node_types(),
             "edge_types": self._count_edge_types(),
-            "density": nx.density(self.graph),
+            "density": round(nx.density(self.graph), 4) if len(self.nodes) > 1 else 0,
         }
     
     def _count_node_types(self) -> Dict[str, int]:
-        """Count nodes by type."""
         counts = defaultdict(int)
         for node in self.nodes.values():
             counts[node.node_type] += 1
         return dict(counts)
     
     def _count_edge_types(self) -> Dict[str, int]:
-        """Count edges by relation type."""
         counts = defaultdict(int)
         for edge in self.edges:
             counts[edge.relation_type] += 1
         return dict(counts)
     
     def to_json(self) -> str:
-        """
-        Export graph to JSON format for frontend visualization.
-        
-        Format:
-        {
-            "nodes": [{"id", "label", "type", "properties", ...}],
-            "links": [{"source", "target", "type", "properties"}],
-            "metadata": {...}
-        }
-        
-        Returns:
-            JSON string
-        """
-        nodes_data = []
-        for node_id, node in self.nodes.items():
-            nodes_data.append({
-                "id": node_id,
-                "label": node.label,
-                "type": node.node_type,
-                "properties": node.properties,
-                "hypernyms": node.hypernyms
-            })
-        
-        links_data = []
-        for edge in self.edges:
-            links_data.append({
-                "source": edge.source,
-                "target": edge.target,
-                "type": edge.relation_type,
-                "properties": edge.properties
-            })
-        
-        output = {
-            "nodes": nodes_data,
-            "links": links_data,
-            "metadata": self.get_statistics()
-        }
-        
-        return json.dumps(output, indent=2)
+        """Export graph to JSON format for frontend visualization."""
+        return json.dumps(self.to_dict(), indent=2)
     
     def to_dict(self) -> Dict[str, Any]:
         """Export graph as dictionary."""
-        nodes_data = []
-        for node_id, node in self.nodes.items():
-            nodes_data.append({
-                "id": node_id,
-                "label": node.label,
-                "type": node.node_type,
-                "properties": node.properties,
-                "hypernyms": node.hypernyms
-            })
-        
-        links_data = []
-        for edge in self.edges:
-            links_data.append({
-                "source": edge.source,
-                "target": edge.target,
-                "type": edge.relation_type,
-                "properties": edge.properties
-            })
+        nodes_data = [asdict(node) for node in self.nodes.values()]
+        links_data = [{
+            "source": edge.source,
+            "target": edge.target,
+            "type": edge.relation_type,
+            "properties": edge.properties
+        } for edge in self.edges]
         
         return {
             "nodes": nodes_data,
@@ -289,32 +197,17 @@ class GraphConstructor:
         }
     
     def find_paths(self, source_id: str, target_id: str) -> List[List[str]]:
-        """
-        Find all paths between two nodes.
-        
-        Args:
-            source_id: Source node ID
-            target_id: Target node ID
-            
-        Returns:
-            List of paths (each path is a list of node IDs)
-        """
+        """Tìm tất cả các đường đi giữa 2 nodes."""
         try:
             return list(nx.all_simple_paths(self.graph, source_id, target_id))
         except nx.NetworkXNoPath:
             return []
     
     def get_neighbors(self, node_id: str, direction: str = "all") -> List[str]:
-        """
-        Get neighboring nodes.
-        
-        Args:
-            node_id: Node ID
-            direction: "in", "out", or "all"
+        """Lấy danh sách các node lân cận."""
+        if node_id not in self.graph:
+            return []
             
-        Returns:
-            List of neighbor node IDs
-        """
         if direction == "in":
             return list(self.graph.predecessors(node_id))
         elif direction == "out":

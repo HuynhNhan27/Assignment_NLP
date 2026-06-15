@@ -171,7 +171,7 @@ class TextToKnowledgeGraphPipeline:
         """
         print("\n[STAGE 3] Ontology & Hierarchy Resolution")
         
-        final_kg = self.ontology_resolver.resolve(extraction_result["entities"], wsd_result["disambiguated"], extraction_result["relations"])
+        final_kg = self.ontology_resolver.resolve(extraction_result["entities"], wsd_result, extraction_result["relations"])
 
         print(f"  - Ontology Entities: {len(final_kg['nodes'])} entities")
         for n in final_kg['nodes']:
@@ -181,13 +181,11 @@ class TextToKnowledgeGraphPipeline:
         for rel in final_kg['relations']:
             print(f"(ID relation:   * {rel['subject']} --[{rel['predicate']}]--> {rel['obj']})")
         
-        return {
-            "kg": final_kg,
-        }
+        return final_kg
     
     def stage_4_graph_construction(self, 
                                    extraction_result: Dict[str, Any],
-                                   normalization_result: Dict[str, Any],
+                                   wsd_result: Dict[str, Any],
                                    ontology_result: Dict[str, Any]) -> GraphConstructor:
         """
         Stage 4: Build the Knowledge Graph with merging.
@@ -202,107 +200,117 @@ class TextToKnowledgeGraphPipeline:
         """
         print("\n[STAGE 4] Graph Construction")
         
-        # Get entities from Stage 1 (now includes noun chunks)
-        entities = list(set([e['text'] for e in extraction_result['entities']]))
-        entity_map = normalization_result.get('entity_map')
-        if entity_map is None:
-            entity_map = self.entity_normalizer.normalize_entities(entities)
+        # # Get entities from Stage 1 (now includes noun chunks)
+        # entities = list(set([e['text'] for e in extraction_result['entities']]))
+        # entity_map = normalization_result.get('entity_map')
+        # if entity_map is None:
+        #     entity_map = self.entity_normalizer.normalize_entities(entities)
         
-        # If no entities found, extract from relations
-        if not entities:
-            relations = extraction_result['relations']
-            subjects = set([r['subject'] for r in relations])
-            objects = set([r['obj'] for r in relations])
-            entities = list(subjects | objects)
-            entity_map = self.entity_normalizer.normalize_entities(entities)
-            print(f"  - No direct entities found; extracted {len(entities)} from relations")
+        # # If no entities found, extract from relations
+        # if not entities:
+        #     relations = extraction_result['relations']
+        #     subjects = set([r['subject'] for r in relations])
+        #     objects = set([r['obj'] for r in relations])
+        #     entities = list(subjects | objects)
+        #     entity_map = self.entity_normalizer.normalize_entities(entities)
+        #     print(f"  - No direct entities found; extracted {len(entities)} from relations")
         
-        # Add entity nodes to graph
-        entity_nodes = {}
-        for entity in entities:
-            canonical = entity_map.get(entity, entity)
-            entity_data = next((e for e in extraction_result['entities'] if e['text'] == entity), None)
-            if entity_data is None:
-                entity_data = next((e for e in extraction_result['entities'] if e.get('head_noun', '').lower() == entity.lower()), None)
-            node_id = self.graph_constructor.add_node(
-                label=canonical,
-                node_type="entity",
-                properties={
-                    "original": entity,
-                    "canonical_id": entity_data.get('canonical_id') if entity_data else None,
-                    "head_noun": entity_data.get('head_noun') if entity_data else None,
-                    "lemma": entity_data.get('lemma') if entity_data else None,
-                    "label": entity_data.get('label') if entity_data else None,
-                    "confidence": entity_data.get('confidence') if entity_data else None,
-                    "modifiers": self._json_safe_modifiers(entity_data.get('modifiers') if entity_data else []),
-                    "modifier_summary": entity_data.get('modifier_summary') if entity_data else {},
-                }
-            )
-            entity_nodes[canonical] = node_id
-            if entity_data:
-                if entity_data.get('canonical_id'):
-                    entity_nodes[entity_data['canonical_id']] = node_id
-                entity_nodes[entity_data.get('text', entity)] = node_id
-                if entity_data.get('lemma'):
-                    entity_nodes[entity_data['lemma']] = node_id
-                if entity_data.get('head_noun'):
-                    entity_nodes[entity_data['head_noun']] = node_id
+        # # Add entity nodes to graph
+        # entity_nodes = {}
+        # for entity in entities:
+        #     canonical = entity_map.get(entity, entity)
+        #     entity_data = next((e for e in extraction_result['entities'] if e['text'] == entity), None)
+        #     if entity_data is None:
+        #         entity_data = next((e for e in extraction_result['entities'] if e.get('head_noun', '').lower() == entity.lower()), None)
+        #     node_id = self.graph_constructor.add_node(
+        #         label=canonical,
+        #         node_type="entity",
+        #         properties={
+        #             "original": entity,
+        #             "canonical_id": entity_data.get('canonical_id') if entity_data else None,
+        #             "head_noun": entity_data.get('head_noun') if entity_data else None,
+        #             "lemma": entity_data.get('lemma') if entity_data else None,
+        #             "label": entity_data.get('label') if entity_data else None,
+        #             "confidence": entity_data.get('confidence') if entity_data else None,
+        #             "modifiers": self._json_safe_modifiers(entity_data.get('modifiers') if entity_data else []),
+        #             "modifier_summary": entity_data.get('modifier_summary') if entity_data else {},
+        #         }
+        #     )
+        #     entity_nodes[canonical] = node_id
+        #     if entity_data:
+        #         if entity_data.get('canonical_id'):
+        #             entity_nodes[entity_data['canonical_id']] = node_id
+        #         entity_nodes[entity_data.get('text', entity)] = node_id
+        #         if entity_data.get('lemma'):
+        #             entity_nodes[entity_data['lemma']] = node_id
+        #         if entity_data.get('head_noun'):
+        #             entity_nodes[entity_data['head_noun']] = node_id
 
-        def resolve_node_id(name: str) -> Optional[str]:
-            if not name:
-                return None
-            if name in entity_nodes:
-                return entity_nodes[name]
-            lower_name = name.lower()
-            if lower_name in entity_nodes:
-                return entity_nodes[lower_name]
-            return entity_nodes.get(entity_map.get(name, name))
+        # def resolve_node_id(name: str) -> Optional[str]:
+        #     if not name:
+        #         return None
+        #     if name in entity_nodes:
+        #         return entity_nodes[name]
+        #     lower_name = name.lower()
+        #     if lower_name in entity_nodes:
+        #         return entity_nodes[lower_name]
+        #     return entity_nodes.get(entity_map.get(name, name))
         
-        print(f"  - Added {len(entity_nodes)} entity nodes")
+        # print(f"  - Added {len(entity_nodes)} entity nodes")
         
-        # Add relations as edges
-        relations = ontology_result['normalized_relations']
-        edge_count = 0
-        for rel in relations:
-            subject_canonical = entity_map.get(rel['subject'], rel['subject'])
-            object_canonical = entity_map.get(rel['object'], rel['object'])
-            subject_id = resolve_node_id(rel['subject']) or resolve_node_id(subject_canonical)
-            object_id = resolve_node_id(rel['object']) or resolve_node_id(object_canonical)
+        # # Add relations as edges
+        # relations = ontology_result['normalized_relations']
+        # edge_count = 0
+        # for rel in relations:
+        #     subject_canonical = entity_map.get(rel['subject'], rel['subject'])
+        #     object_canonical = entity_map.get(rel['object'], rel['object'])
+        #     subject_id = resolve_node_id(rel['subject']) or resolve_node_id(subject_canonical)
+        #     object_id = resolve_node_id(rel['object']) or resolve_node_id(object_canonical)
 
-            if subject_id and object_id:
-                self.graph_constructor.add_edge(
-                    source_id=subject_id,
-                    target_id=object_id,
-                    relation_type=rel['predicate'],
-                    properties={
-                        "confidence": 0.85,
-                        "source_sentence": extraction_result.get('text', ''),
-                        "original_subject": rel['subject'],
-                        "original_object": rel['object'],
-                    }
-                )
-                edge_count += 1
+        #     if subject_id and object_id:
+        #         self.graph_constructor.add_edge(
+        #             source_id=subject_id,
+        #             target_id=object_id,
+        #             relation_type=rel['predicate'],
+        #             properties={
+        #                 "confidence": 0.85,
+        #                 "source_sentence": extraction_result.get('text', ''),
+        #                 "original_subject": rel['subject'],
+        #                 "original_object": rel['object'],
+        #             }
+        #         )
+        #         edge_count += 1
         
-        print(f"  - Added {edge_count} relation edges")
+        # print(f"  - Added {edge_count} relation edges")
         
-        # Add hierarchy edges (example)
-        for entity, hierarchy in ontology_result['hierarchies'].items():
-            if hierarchy.get('hierarchy'):
-                entity_canonical = entity_map.get(entity, entity)
-                if entity_canonical in entity_nodes:
-                    for h in hierarchy['hierarchy'][:2]:
-                        parent_id = self.graph_constructor.add_node(
-                            label=h['text'],
-                            node_type="concept",
-                            properties={"definition": h['definition']}
-                        )
-                        self.graph_constructor.add_hierarchy_edge(
-                            child_id=entity_nodes[entity_canonical],
-                            parent_id=parent_id
-                        )
+        # # Add hierarchy edges (example)
+        # for entity, hierarchy in ontology_result['hierarchies'].items():
+        #     if hierarchy.get('hierarchy'):
+        #         entity_canonical = entity_map.get(entity, entity)
+        #         if entity_canonical in entity_nodes:
+        #             for h in hierarchy['hierarchy'][:2]:
+        #                 parent_id = self.graph_constructor.add_node(
+        #                     label=h['text'],
+        #                     node_type="concept",
+        #                     properties={"definition": h['definition']}
+        #                 )
+        #                 self.graph_constructor.add_hierarchy_edge(
+        #                     child_id=entity_nodes[entity_canonical],
+        #                     parent_id=parent_id
+        #                 )
         
-        print(f"  - Graph statistics: {self.graph_constructor.get_statistics()}")
+        # print(f"  - Graph statistics: {self.graph_constructor.get_statistics()}")
         
+        # return self.graph_constructor
+
+        print(f"  - Ontology Entities: {len(ontology_result['nodes'])} entities")
+        print(f"  - Ontology Relations: {len(ontology_result['relations'])} relations")
+
+        self.graph_constructor.build_from_pipeline(
+            ontology_data=ontology_result, 
+            wsd_data=wsd_result
+        )
+
         return self.graph_constructor
     
     def stage_5_export(self, graph: GraphConstructor, output_path: str) -> None:

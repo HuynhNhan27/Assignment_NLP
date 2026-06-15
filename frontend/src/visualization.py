@@ -72,16 +72,16 @@ def visualize_as_mindmap(graph_json_path: str, output_path: str = None) -> str:
         
         # Define colors for different node types
         color_map = {
-            'entity': '#3498db',      # Blue for entities
-            'concept': '#e74c3c',     # Red for concepts
-            'relation': '#2ecc71'     # Green for relations
+            'relation': '#2ecc71',     # Green for relations
+            'ENTITY': '#3498db',      # Blue for entities
+            'CATEGORY': '#e74c3c',     # Red for concepts
         }
         
         # Add nodes
         node_id_map = {}  # Map node id to index for pyvis
         for i, node in enumerate(nodes):
             node_id_map[node['id']] = node['label']
-            node_type = node.get('type', 'entity')
+            node_type = node.get('node_type', 'ENTITY')
             color = color_map.get(node_type, '#95a5a6')
             size = 30 if node_type == 'concept' else 25
             
@@ -157,8 +157,8 @@ def visualize_as_dag(graph_json_path: str, output_path: str = None) -> str:
     links = graph_data.get('links', [])
     
     # Separate nodes by type for hierarchical layout
-    concepts = [n for n in nodes if n.get('type') == 'concept']
-    entities = [n for n in nodes if n.get('type') == 'entity']
+    concepts = [n for n in nodes if n.get('node_type') == 'CATEGORY']
+    entities = [n for n in nodes if n.get('node_type') == 'ENTITY']
     
     # Create hierarchical positions
     positions = {}
@@ -199,16 +199,16 @@ def visualize_as_dag(graph_json_path: str, output_path: str = None) -> str:
     node_size = []
     
     color_map = {
-        'concept': '#e74c3c',  # Red
-        'entity': '#3498db'    # Blue
+        'ENTITY': '#3498db',      # Blue for entities
+        'CATEGORY': '#e74c3c',     # Red for concepts
     }
-    
+
     for node in nodes:
         if node['id'] in positions:
             x, y = positions[node['id']]
             node_x.append(x)
             node_y.append(y)
-            node_type = node.get('type', 'entity')
+            node_type = node.get('node_type', 'ENTITY')
             node_text.append(node['label'])
             node_color.append(color_map.get(node_type, '#95a5a6'))
             node_size.append(40 if node_type == 'concept' else 30)
@@ -319,16 +319,16 @@ def interactive_graph_explorer(graph_json_path: str, output_path: str = None) ->
     node_color = []
     
     color_map = {
-        'concept': '#e74c3c',
-        'entity': '#3498db',
-        'relation': '#2ecc71'
+        'relation': '#2ecc71',     # Green for relations
+        'ENTITY': '#3498db',      # Blue for entities
+        'CATEGORY': '#e74c3c',     # Red for concepts
     }
     
     for node in nodes:
         x, y = positions[node['id']]
         node_x.append(x)
         node_y.append(y)
-        node_type = node.get('type', 'entity')
+        node_type = node.get('node_type', 'ENTITY')
         node_text.append(node['label'])
         node_color.append(color_map.get(node_type, '#95a5a6'))
     
@@ -416,7 +416,7 @@ def qa_over_graph(graph_json_path: str, question: str) -> str:
     # Find connections
     answer = f"Found {len(related_nodes)} related entities:\n"
     for node in related_nodes:
-        answer += f"- {node['label']} ({node.get('type', 'unknown')})\n"
+        answer += f"- {node['label']} ({node.get('node_type', 'unknown')})\n"
     
     # Find relations involving these nodes
     related_links = []

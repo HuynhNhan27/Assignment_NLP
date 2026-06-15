@@ -62,7 +62,7 @@ class InformationExtractor:
             model_name: spaCy model to load (default: en_core_web_sm)
         """
         try:
-            self.nlp = spacy.load(model_name)
+            # self.nlp = spacy.load(model_name)
             self.preprocessor = spacy.load(model_name)
             
             # Try to add fastcoref for coreference resolution (optional)
@@ -100,9 +100,9 @@ class InformationExtractor:
 
             head_noun = self._extract_head_noun(ent)
             modifiers = self._extract_modifiers(ent)
-            head_noun_lemma = ent.root.lemma_.lower()
+            head_noun_lemma = self._get_lemma(ent.root)
             modifier_summary = self.modifier_extractor.get_modifier_summary(modifiers)
-
+            
             entities.append(Entity(
                 text=ent.text,
                 label=ent.label_,
@@ -125,9 +125,12 @@ class InformationExtractor:
 
             head_noun = chunk.root.text
             modifiers = self._extract_modifiers(chunk)
-            head_noun_lemma = chunk.root.lemma_.lower()
+            head_noun_lemma = self._get_lemma(chunk.root)
             modifier_summary = self.modifier_extractor.get_modifier_summary(modifiers)
-
+            
+            # (Tuỳ chọn bổ sung sau này): Bạn có thể loại bỏ các từ hạn định (a, an, the, my...)
+            # ra khỏi text ở đây nếu muốn Knowledge Graph sạch hơn.
+            
             entities.append(Entity(
                 text=chunk.text,
                 label="NOUN",
@@ -273,7 +276,7 @@ class InformationExtractor:
         # BƯỚC 2: QUÉT 1 VÒNG DUY NHẤT LẤY TOÀN BỘ QUAN HỆ
         for token in doc:
             # --- LOẠI 1: QUAN HỆ QUA ĐỘNG TỪ ---
-            if token.pos_ == "VERB" or token.lemma_.lower() == "be":
+            if token.pos_ == "VERB" or self._get_lemma(token) == "be":
                 predicate_parts = []
                 
                 if token.pos_ == "VERB":
@@ -341,6 +344,17 @@ class InformationExtractor:
         # Lọc trùng lặp Relation
         unique_relations = {(r.subject, r.predicate, r.obj): r for r in relations}
         return list(unique_relations.values())
+    
+    def _get_lemma(self, token) -> str:
+        """
+        Trả về lemma chuẩn hóa:
+        - PROPN hoặc NER entity: giữ nguyên case gốc của spaCy
+        - NOUN thường: lowercase
+        """
+        if token.pos_ == "PROPN" or token.ent_type_:
+            return token.lemma_          # "Apple", "Google", "Vietnam"
+        else:
+            return token.lemma_.lower()  # "dog", "company", "result"
 
     def _get_subjects(self, verb_token) -> List[Any]:
         """Tìm các chủ ngữ của một động từ, xử lý cả liên từ và rút gọn chủ ngữ."""
@@ -504,9 +518,10 @@ class InformationExtractor:
         entities = self.extract_entities(text, doc)
         relations = self.extract_relations(text, entities, doc)
 
-        filter_entities = self.filter_entities_by_relations(entities, relations)
+        # entities = self.filter_entities_by_relations(entities, relations)
         return {
             "text": text,
-            "entities": [self._entity_to_dict(e) for e in filter_entities],
+            # "entities": [self._entity_to_dict(e) for e in filter_entities],
+            "entities": [asdict(e) for e in entities],
             "relations": [asdict(r) for r in relations],
         }
