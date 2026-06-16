@@ -1,0 +1,22 @@
+name: Deploy Dashboard Landing Page to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main  # Change to 'master' if your default branch uses that name
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy Folder to GitHub Pages Branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./frontend/public  # This targets your directory and treats its contents as the web root
