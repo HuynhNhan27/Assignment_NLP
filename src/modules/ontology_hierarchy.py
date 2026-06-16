@@ -90,69 +90,66 @@ class OntologyResolver:
         adj_up = defaultdict(set)    # node -> các cha của nó
         adj_down = defaultdict(set)  # node -> các con của nó
         
-        wsd_map = {ent['canonical_id']: ent for ent in wsd_entities if 'canonical_id' in ent}
+        # wsd_map = {ent['canonical_id']: ent for ent in wsd_entities if 'canonical_id' in ent}
         seen_canonical = set()
         entities_ids = set()
         
         # ==========================================
         # BƯỚC 1: XÂY DỰNG ĐỒ THỊ NHÁP (Đầy đủ độ sâu)
         # ==========================================
-        for raw_ent in raw_entities:
-            c_id = raw_ent['canonical_id']
+        for ent in wsd_entities:
+            c_id = ent['canonical_id']
             if c_id in seen_canonical: continue
             seen_canonical.add(c_id)
             entities_ids.add(c_id)
             
             temp_nodes[c_id] = OntologyNode(
-                id=c_id, label=raw_ent['text'], node_type="ENTITY",
-                properties={"confidence": raw_ent.get('confidence', 1.0)}
+                id=c_id, label=ent['original_text'], node_type="ENTITY",
+                properties={"confidence": ent.get('confidence', 1.0)}
             )
             
-            wsd_data = wsd_map.get(c_id)
-            
-            if wsd_data:
-                try:
-                    synset = wn.synset(wsd_data['text'])
-                    queue = [(synset, c_id, 0)]
-                    visited_synsets = set()
+            try:
+                synset = wn.synset(ent['text'])
+                queue = [(synset, c_id, 0)]
+                visited_synsets = set()
+                
+                while queue:
+                    curr_syn, curr_id, depth = queue.pop(0)
                     
-                    while queue:
-                        curr_syn, curr_id, depth = queue.pop(0)
+                    if depth >= self.max_hypernym_depth: continue
+                    if curr_syn in visited_synsets: continue
+                    visited_synsets.add(curr_syn)
+                    
+                    selected_hypernyms = curr_syn.hypernyms()[:self.max_hypernyms_per_node]
+                    
+                    for parent_syn in selected_hypernyms:
+                        parent_label = parent_syn.lemmas()[0].name().replace("_", " ")
+                        parent_id = self._get_category_id(parent_label)
                         
-                        if depth >= self.max_hypernym_depth: continue
-                        if curr_syn in visited_synsets: continue
-                        visited_synsets.add(curr_syn)
-                        
-                        selected_hypernyms = curr_syn.hypernyms()[:self.max_hypernyms_per_node]
-                        
-                        for parent_syn in selected_hypernyms:
-                            parent_label = parent_syn.lemmas()[0].name().replace("_", " ")
-                            parent_id = self._get_category_id(parent_label)
+                        if parent_id not in temp_nodes:
+                            temp_nodes[parent_id] = OntologyNode(
+                                id=parent_id, label=parent_label, node_type="CATEGORY", properties={"source": "wordnet"}
+                            )
                             
-                            if parent_id not in temp_nodes:
-                                temp_nodes[parent_id] = OntologyNode(
-                                    id=parent_id, label=parent_label, node_type="CATEGORY", properties={"source": "wordnet"}
-                                )
-                                
-                            # Lưu vào danh sách kề (Adjacency List)
-                            adj_up[curr_id].add(parent_id)
-                            adj_down[parent_id].add(curr_id)
-                            
-                            queue.append((parent_syn, parent_id, depth + 1))
-                except Exception:
-                    pass
-            else:
-                # OOV Fallback
-                head_noun = raw_ent.get('head_noun', '').lower()
-                text_lower = raw_ent['text'].lower()
-                if head_noun and head_noun != text_lower and head_noun in text_lower:
-                    parent_id = self._get_category_id(head_noun)
-                    if parent_id not in temp_nodes:
-                        temp_nodes[parent_id] = OntologyNode(
-                            id=parent_id, label=head_noun, node_type="CATEGORY", properties={"source": "syntax_head_noun"}
-                        )
-                    adj_up[c_id].add(parent_id)
-                    adj_down[parent_id].add(c_id)
+                        # Lưu vào danh sách kề (Adjacency List)
+                        adj_up[curr_id].add(parent_id)
+                        adj_down[parent_id].add(curr_id)
+                        
+                        queue.append((parent_syn, parent_id, depth + 1))
+            except Exception:
+                pass
+        # else:
+        #     # OOV Fallback
+        #     head_noun = ent.get('head_noun', '').lower()
+        #     text_lower = ent['text'].lower()
+        #     if head_noun and head_noun != text_lower and head_noun in text_lower:
+        #         parent_id = self._get_category_id(head_noun)
+        #         if parent_id not in temp_nodes:
+        #             temp_nodes[parent_id] = OntologyNode(
+        #                 id=parent_id, label=head_noun, node_type="CATEGORY", properties={"source": "syntax_head_noun"}
+        #             )
+        #         adj_up[c_id].add(parent_id)
+        #         adj_down[parent_id].add(c_id)
 
         # ==========================================
         # BƯỚC 2: TÌM TẬP HỢP LEAVES (ENTITIES GỐC) CHO TỪNG NODE

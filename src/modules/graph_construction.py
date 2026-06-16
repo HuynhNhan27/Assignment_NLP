@@ -103,7 +103,7 @@ class GraphConstructor:
         
         return True
 
-    def build_from_pipeline(self, ontology_data: Dict[str, Any], wsd_data: Optional[List[Dict]] = None) -> None:
+    def build_from_pipeline(self, ontology_data: Dict[str, Any], wsd_entities: Optional[List[Dict]] = None) -> None:
         """
         Xây dựng Graph trực tiếp từ output của Stage 3 (Ontology) và Stage 2 (WSD).
         
@@ -114,8 +114,8 @@ class GraphConstructor:
         """
         # 1. Map WSD data theo canonical_id để tra cứu nhanh (O(1))
         wsd_map = {}
-        if wsd_data:
-            for wsd_ent in wsd_data:
+        if wsd_entities:
+            for wsd_ent in wsd_entities:
                 c_id = wsd_ent.get('canonical_id')
                 if c_id:
                     wsd_map[c_id] = {

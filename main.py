@@ -106,6 +106,7 @@ class TextToKnowledgeGraphPipeline:
         print("\n[STAGE 2] Word Sense Disambiguation & Normalization")
         text = extraction_result['text']
         entities = extraction_result['entities']
+        relations = extraction_result['relations']
         
         # Extract unique entities
         # entities = [e['text'] for e in extraction_result['entities']]
@@ -124,7 +125,14 @@ class TextToKnowledgeGraphPipeline:
             print(f"    * {d['text']} -> {d['definition']} (conf: {d['confidence']:.2f})")
             print(f"       ID: {d['canonical_id']}")
         
-        return disambiguated_entities
+        wsd_result = self.wsd.normalize_post_wsd(disambiguated_entities, relations)
+
+        print(f"  - Normalize sample: {len(wsd_result['entities'])} entities")
+        for d in wsd_result['entities']:
+            print(f"    * {d['text']} -> {d['definition']} (conf: {d['confidence']:.2f})")
+            print(f"       ID: {d['canonical_id']}")
+
+        return wsd_result
     
     def stage_3_ontology_resolution(self, extraction_result: Dict[str, Any], 
                                     wsd_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -139,8 +147,7 @@ class TextToKnowledgeGraphPipeline:
             Dictionary with hierarchy information
         """
         print("\n[STAGE 3] Ontology & Hierarchy Resolution")
-        
-        final_kg = self.ontology_resolver.resolve(extraction_result["entities"], wsd_result, extraction_result["relations"])
+        final_kg = self.ontology_resolver.resolve(extraction_result["entities"], wsd_result['entities'], wsd_result["relations"])
 
         print(f"  - Ontology Entities: {len(final_kg['nodes'])} entities")
         for n in final_kg['nodes']:
@@ -168,77 +175,13 @@ class TextToKnowledgeGraphPipeline:
             Populated GraphConstructor instance
         """
         print("\n[STAGE 4] Graph Construction")
-        
-        # # Get entities from Stage 1 (now includes noun chunks)
-        # entities = list(set([e['text'] for e in extraction_result['entities']]))
-        # entity_map = normalization_result['entity_map']
-        
-        # # If no entities found, extract from relations
-        # if not entities:
-        #     relations = extraction_result['relations']
-        #     subjects = set([r['subject'] for r in relations])
-        #     objects = set([r['obj'] for r in relations])
-        #     entities = list(subjects | objects)
-        #     entity_map = self.entity_normalizer.normalize_entities(entities)
-        #     print(f"  - No direct entities found; extracted {len(entities)} from relations")
-        
-        # # Add entity nodes to graph
-        # entity_nodes = {}
-        # for entity in entities:
-        #     canonical = entity_map.get(entity, entity)
-        #     node_id = self.graph_constructor.add_node(
-        #         label=canonical,
-        #         node_type="entity",
-        #         properties={"original": entity}
-        #     )
-        #     entity_nodes[canonical] = node_id
-        
-        # print(f"  - Added {len(entity_nodes)} entity nodes")
-        
-        # # Add relations as edges
-        # relations = ontology_result['normalized_relations']
-        # edge_count = 0
-        # for rel in relations:
-        #     subject_canonical = entity_map.get(rel['subject'], rel['subject'])
-        #     object_canonical = entity_map.get(rel['object'], rel['object'])
-            
-        #     if subject_canonical in entity_nodes and object_canonical in entity_nodes:
-        #         self.graph_constructor.add_edge(
-        #             source_id=entity_nodes[subject_canonical],
-        #             target_id=entity_nodes[object_canonical],
-        #             relation_type=rel['predicate'],
-        #             properties={"confidence": 0.85}
-        #         )
-        #         edge_count += 1
-        
-        # print(f"  - Added {edge_count} relation edges")
-        
-        # # Add hierarchy edges (example)
-        # for entity, hierarchy in ontology_result['hierarchies'].items():
-        #     if hierarchy.get('hierarchy'):
-        #         entity_canonical = entity_map.get(entity, entity)
-        #         if entity_canonical in entity_nodes:
-        #             for h in hierarchy['hierarchy'][:2]:
-        #                 parent_id = self.graph_constructor.add_node(
-        #                     label=h['text'],
-        #                     node_type="concept",
-        #                     properties={"definition": h['definition']}
-        #                 )
-        #                 self.graph_constructor.add_hierarchy_edge(
-        #                     child_id=entity_nodes[entity_canonical],
-        #                     parent_id=parent_id
-        #                 )
-        
-        # print(f"  - Graph statistics: {self.graph_constructor.get_statistics()}")
-        
-        # return self.graph_constructor
 
         print(f"  - Ontology Entities: {len(ontology_result['nodes'])} entities")
         print(f"  - Ontology Relations: {len(ontology_result['relations'])} relations")
 
         self.graph_constructor.build_from_pipeline(
             ontology_data=ontology_result, 
-            wsd_data=wsd_result
+            wsd_entities=wsd_result['entities']
         )
 
         return self.graph_constructor
@@ -320,8 +263,8 @@ Cattle are large artiodactyls, mammals with cloven hooves, meaning that they wal
     """
 
     sample_test = """
-    John is eating an apple. Tom is eating a banana.
-    """
+    Elon Musk, who is a billionaire, announced a new model.
+"""
 
     # Cows are herbivorous mammals that eat grass in meadows
     # Elon Musk, who is a billionaire, announced a new model.

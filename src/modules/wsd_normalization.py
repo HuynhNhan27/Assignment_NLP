@@ -10,7 +10,7 @@ Handles:
 Tools: sentence-transformers, NLTK WordNet
 """
 
-from typing import List, Dict, Tuple, Optional, Set
+from typing import List, Dict, Tuple, Optional, Set, Any
 from dataclasses import dataclass, asdict
 import string
 import nltk
@@ -51,8 +51,8 @@ class DisambiguatedEntity:
 
 class WordSenseDisambiguator:
     """
-    Disambiguate word senses using an Ensemble of Modified Lesk (Semantic) 
-    and Original Lesk (Lexical) approaches.
+    Disambiguate word senses using an Ensemble of Semantic Lesk
+    and Lexical Lesk approaches.
     """
     
     def __init__(self, model_name: str = "all-MiniLM-L6-v2", lexical_weight: float = 0.3):
@@ -204,6 +204,87 @@ class WordSenseDisambiguator:
                 
         return results
 
+    def normalize_post_wsd(self, disambiguated_entities: List[Dict], relations: List[Dict]) -> Dict[str, Any]:
+        """
+        Gom nhóm các ID có cùng ngữ nghĩa (synset) lại với nhau.
+        
+        Args:
+            disambiguated_entities: Danh sách các entity đã được WSD (chứa synset_id, text là synset lemma, và canonical_id từ bước coref).
+            relations: Danh sách các quan hệ ban đầu (đang trỏ vào các canonical_id cũ).
+            
+        Returns:
+            Tuple chứa danh sách entities đã gộp (duy nhất theo synset) và relations đã cập nhật ID.
+        """
+        # Map: synset_id -> global_id (chọn một ID chung cho nhóm)
+        synset_to_global_id = {}
+        
+        # Map: old_canonical_id -> global_id (để cập nhật relations)
+        old_id_to_global_id = {}
+        
+        # Lưu các entity đại diện cho từng ngữ nghĩa
+        unique_semantic_entities = []
+        seen_global_ids = set()
+
+        # ==========================================
+        # 1. Gom nhóm theo Synset ID
+        # ==========================================
+        for ent in disambiguated_entities:
+            old_c_id = ent.get('canonical_id')
+            synset_id = ent.get('synset_id')
+            
+            if not old_c_id:
+                continue
+                
+            # Khóa gom nhóm: Dùng synset_id. Nếu WSD thất bại (không có synset), giữ nguyên old_c_id làm nhóm riêng
+            grouping_key = str(synset_id) if synset_id else str(old_c_id)
+            
+            # Chọn ID đầu tiên gặp được làm global_id cho toàn bộ nhóm synset này
+            if grouping_key not in synset_to_global_id:
+                synset_to_global_id[grouping_key] = old_c_id
+                
+            global_id = synset_to_global_id[grouping_key]
+            
+            # Lưu lịch sử map để lát đổi relations
+            old_id_to_global_id[old_c_id] = global_id
+            
+            # Chỉ giữ lại 1 entity duy nhất cho mỗi nhóm ngữ nghĩa trong danh sách cuối
+            if global_id not in seen_global_ids:
+                new_ent = ent.copy()
+                new_ent['canonical_id'] = global_id 
+                # Lưu ý: ent['text'] hiện tại đang là tên synset (vd: 'apple.n.01') do hàm WSD của bạn gán
+                unique_semantic_entities.append(new_ent)
+                seen_global_ids.add(global_id)
+
+        # ==========================================
+        # 2. Cập nhật Relations
+        # ==========================================
+        updated_relations = []
+        for rel in relations:
+            new_rel = rel.copy()
+            
+            # Cập nhật subject
+            src = new_rel.get('subject')
+            if src in old_id_to_global_id:
+                if 'subject' in new_rel:
+                    new_rel['subject'] = old_id_to_global_id[src]
+                    
+            # Cập nhật obj
+            tgt = new_rel.get('obj')
+            if tgt in old_id_to_global_id:
+                if 'obj' in new_rel:
+                    new_rel['obj'] = old_id_to_global_id[tgt]
+                    
+            # Lọc bỏ self-loops (nếu 2 entities được gộp thành 1 khiến source trùng target)
+            new_src = new_rel.get('subject')
+            new_tgt = new_rel.get('obj')
+            
+            if new_src != new_tgt:
+                updated_relations.append(new_rel)
+                
+        return {
+            "entities": unique_semantic_entities,
+            "relations": updated_relations,
+        }
 
 class EntityNormalizer:
     """
