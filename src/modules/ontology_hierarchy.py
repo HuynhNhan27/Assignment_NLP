@@ -107,49 +107,49 @@ class OntologyResolver:
                 id=c_id, label=ent['original_text'], node_type="ENTITY",
                 properties={"confidence": ent.get('confidence', 1.0)}
             )
-            
-            try:
-                synset = wn.synset(ent['text'])
-                queue = [(synset, c_id, 0)]
-                visited_synsets = set()
-                
-                while queue:
-                    curr_syn, curr_id, depth = queue.pop(0)
+            if ent['synset_id']:
+                try:
+                    synset = wn.synset(ent['text'])
+                    queue = [(synset, c_id, 0)]
+                    visited_synsets = set()
                     
-                    if depth >= self.max_hypernym_depth: continue
-                    if curr_syn in visited_synsets: continue
-                    visited_synsets.add(curr_syn)
-                    
-                    selected_hypernyms = curr_syn.hypernyms()[:self.max_hypernyms_per_node]
-                    
-                    for parent_syn in selected_hypernyms:
-                        parent_label = parent_syn.lemmas()[0].name().replace("_", " ")
-                        parent_id = self._get_category_id(parent_label)
+                    while queue:
+                        curr_syn, curr_id, depth = queue.pop(0)
                         
-                        if parent_id not in temp_nodes:
-                            temp_nodes[parent_id] = OntologyNode(
-                                id=parent_id, label=parent_label, node_type="CATEGORY", properties={"source": "wordnet"}
-                            )
+                        if depth >= self.max_hypernym_depth: continue
+                        if curr_syn in visited_synsets: continue
+                        visited_synsets.add(curr_syn)
+                        
+                        selected_hypernyms = curr_syn.hypernyms()[:self.max_hypernyms_per_node]
+                        
+                        for parent_syn in selected_hypernyms:
+                            parent_label = parent_syn.lemmas()[0].name().replace("_", " ")
+                            parent_id = self._get_category_id(parent_label)
                             
-                        # Lưu vào danh sách kề (Adjacency List)
-                        adj_up[curr_id].add(parent_id)
-                        adj_down[parent_id].add(curr_id)
-                        
-                        queue.append((parent_syn, parent_id, depth + 1))
-            except Exception:
-                pass
-        # else:
-        #     # OOV Fallback
-        #     head_noun = ent.get('head_noun', '').lower()
-        #     text_lower = ent['text'].lower()
-        #     if head_noun and head_noun != text_lower and head_noun in text_lower:
-        #         parent_id = self._get_category_id(head_noun)
-        #         if parent_id not in temp_nodes:
-        #             temp_nodes[parent_id] = OntologyNode(
-        #                 id=parent_id, label=head_noun, node_type="CATEGORY", properties={"source": "syntax_head_noun"}
-        #             )
-        #         adj_up[c_id].add(parent_id)
-        #         adj_down[parent_id].add(c_id)
+                            if parent_id not in temp_nodes:
+                                temp_nodes[parent_id] = OntologyNode(
+                                    id=parent_id, label=parent_label, node_type="CATEGORY", properties={"source": "wordnet"}
+                                )
+                                
+                            # Lưu vào danh sách kề (Adjacency List)
+                            adj_up[curr_id].add(parent_id)
+                            adj_down[parent_id].add(curr_id)
+                            
+                            queue.append((parent_syn, parent_id, depth + 1))
+                except Exception:
+                    pass
+            else:
+                # OOV Fallback
+                head_noun = ent.get('text', '').lower()
+                text_lower = ent['original_text'].lower()
+                if head_noun and head_noun != text_lower and head_noun in text_lower:
+                    parent_id = self._get_category_id(head_noun)
+                    if parent_id not in temp_nodes:
+                        temp_nodes[parent_id] = OntologyNode(
+                            id=parent_id, label=head_noun, node_type="CATEGORY", properties={"source": "syntax_head_noun"}
+                        )
+                    adj_up[c_id].add(parent_id)
+                    adj_down[parent_id].add(c_id)
 
         # ==========================================
         # BƯỚC 2: TÌM TẬP HỢP LEAVES (ENTITIES GỐC) CHO TỪNG NODE

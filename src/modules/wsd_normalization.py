@@ -200,7 +200,18 @@ class WordSenseDisambiguator:
                     original_text=wsd_result["original_text"],
                     canonical_id=c_id
                 )
-                results.append(asdict(final_entity))
+            else:
+                final_entity = DisambiguatedEntity(
+                    text=ent_list[0]["head_noun"],
+                    synset_id=None,
+                    definition=None,
+                    confidence=ent_list[0]["confidence"],
+                    semantic_score=None,
+                    lexical_score=None,
+                    original_text=ent_list[0]["text"],
+                    canonical_id=c_id
+                )
+            results.append(asdict(final_entity))
                 
         return results
 
