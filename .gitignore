@@ -35,7 +35,7 @@ data/output/*.json
 *.log
 
 # Frontend HTML
-frontend/public/*.html
+# frontend/public/*.html
 
 # OS
 .DS_Store

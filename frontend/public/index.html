@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NLP Knowledge Graph Dashboard</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --accent-blue: #38bdf8;
+            --accent-purple: #c084fc;
+            --accent-green: #34d399;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border-color: #334155;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 2rem;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        header p {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+
+        /* Visualization Hub Layout */
+        .grid-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+
+        .vis-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.75rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .vis-card:hover {
+            transform: translateY(-4px);
+        }
+
+        .vis-card.mindmap-card:hover {
+            border-color: var(--accent-blue);
+        }
+
+        .vis-card.dag-card:hover {
+            border-color: var(--accent-purple);
+        }
+
+        .vis-card.explorer-card:hover {
+            border-color: var(--accent-green);
+        }
+
+        .vis-badge {
+            align-self: flex-start;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            border-radius: 9999px;
+            margin-bottom: 1rem;
+        }
+
+        .mindmap-badge {
+            background-color: rgba(56, 189, 248, 0.15);
+            color: var(--accent-blue);
+        }
+
+        .dag-badge {
+            background-color: rgba(192, 132, 252, 0.15);
+            color: var(--accent-purple);
+        }
+
+        .explorer-badge {
+            background-color: rgba(52, 211, 153, 0.15);
+            color: var(--accent-green);
+        }
+
+        .vis-card h2 {
+            font-size: 1.4rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .vis-card p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            margin-bottom: 1.5rem;
+            flex-grow: 1;
+        }
+
+        .vis-btn {
+            display: block;
+            text-align: center;
+            text-decoration: none;
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            transition: opacity 0.2s ease;
+        }
+
+        .vis-btn:hover {
+            opacity: 0.9;
+        }
+
+        .mindmap-btn {
+            background-color: var(--accent-blue);
+            color: #000;
+        }
+
+        .dag-btn {
+            background-color: var(--accent-purple);
+            color: #000;
+        }
+
+        .explorer-btn {
+            background-color: var(--accent-green);
+            color: #000;
+        }
+
+        /* Pipeline Showcase Info Box */
+        .showcase-section {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 2rem;
+        }
+
+        .showcase-section h3 {
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .sample-box {
+            background-color: var(--bg-color);
+            border-left: 4px solid var(--accent-blue);
+            padding: 1rem;
+            font-style: italic;
+            color: #e2e8f0;
+            margin-bottom: 1.5rem;
+            border-radius: 0 6px 6px 0;
+        }
+
+        .pipeline-steps {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1rem;
+        }
+
+        .step-item {
+            background: rgba(15, 23, 42, 0.4);
+            padding: 1rem;
+            border-radius: 8px;
+            border: 1px solid rgba(51, 65, 85, 0.5);
+        }
+
+        .step-num {
+            font-size: 0.8rem;
+            font-weight: 800;
+            color: var(--accent-blue);
+            text-transform: uppercase;
+            margin-bottom: 0.25rem;
+        }
+
+        .step-title {
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .step-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <header>
+            <h1>Knowledge Graph Extraction Hub</h1>
+            <p>End-to-End NLP pipeline exploring relations, structural hierarchies, and dependent modifiers</p>
+        </header>
+
+        <main class="grid-cards">
+
+            <section class="vis-card mindmap-card">
+                <div>
+                    <span class="vis-badge mindmap-badge">PyVis Engine</span>
+                    <h2>Dynamic Mind Map</h2>
+                    <p>Physics-driven 2D web topology analyzer. Perfect for tracking global token networks, structural
+                        modifier shapes (gray diamonds), and checking dependencies.</p>
+                </div>
+                <a href="mindmap.html" class="vis-btn mindmap-btn" target="_blank">Launch Mind Map ↗</a>
+            </section>
+
+            <section class="vis-card dag-card">
+                <div>
+                    <span class="vis-badge dag-badge">Plotly / NetworkX</span>
+                    <h2>Taxonomic DAG</h2>
+                    <p>Strict top-down directional structural layout mapping. Designed to isolate class inheritances,
+                        directional links, and subsumption chains cleanly.</p>
+                </div>
+                <a href="dag.html" class="vis-btn dag-btn" target="_blank">Launch DAG View ↗</a>
+            </section>
+
+            <section class="vis-card explorer-card">
+                <div>
+                    <span class="vis-badge explorer-badge">Interactive Matrix</span>
+                    <h2>Graph Explorer</h2>
+                    <p>Data filtering desk built to isolate specific sub-graphs, search text elements, and examine
+                        custom multi-line hover details.</p>
+                </div>
+                <a href="explorer.html" class="vis-btn explorer-btn" target="_blank">Launch Explorer ↗</a>
+            </section>
+
+        </main>
+
+        <footer class="showcase-section">
+            <h3>🧪 Active Processing Context Example</h3>
+            <div class="sample-box">
+                "Whispering quietly, the worried mother checked on her sleeping baby who had a fever."
+            </div>
+
+            <div class="pipeline-steps">
+                <div class="step-item">
+                    <div class="step-num">Stage 1</div>
+                    <div class="step-title">IE Extraction</div>
+                    <div class="step-desc">Isolates primary noun roots ('mother', 'baby') safely away from raw numerical
+                        quantifiers.</div>
+                </div>
+                <div class="step-item">
+                    <div class="step-num">Stage 2</div>
+                    <div class="step-title">Context Normalization</div>
+                    <div class="step-desc">Performs WordSense Disambiguation to sync context structures with explicit
+                        synsets.</div>
+                </div>
+                <div class="step-item">
+                    <div class="step-num">Stage 3</div>
+                    <div class="step-title">Taxonomy Resolver</div>
+                    <div class="step-desc">Fuses parent-child vectors together to calculate tree configurations.</div>
+                </div>
+                <div class="step-item">
+                    <div class="step-num">Stage 4</div>
+                    <div class="step-title">LPG Serializer</div>
+                    <div class="step-desc">Chains independent modifiers into auxiliary gray diamond properties within
+                        NetworkX.</div>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+</body>
+
+</html>
