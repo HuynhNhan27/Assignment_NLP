@@ -208,6 +208,7 @@ class TextToKnowledgeGraphPipeline:
         print(f"  - Ontology Relations: {len(ontology_result['relations'])} relations")
 
         self.graph_constructor.build_from_pipeline(
+            extraction_data=extraction_result,
             ontology_data=ontology_result, 
             wsd_entities=wsd_result['entities']
         )
@@ -291,11 +292,11 @@ Cattle are large artiodactyls, mammals with cloven hooves, meaning that they wal
     """
 
     sample_test = """
-    Whispering quietly, the worried mother checked on her sleeping baby who had a fever.
-    """
+    Two young, talented artists painted a wooden picture frame in the studio.
+    """     
 
     # Cows are herbivorous mammals that eat grass in meadows
-    # Elon Musk, who is a billionaire, announced a new model.
+    # Elon Musk, who is a billionaire, announced a new model Grok for his company.
     # Two young, talented artists painted a wooden picture frame in the studio.
         # Two không nhận diện được, and và ',' ra kết quả khác nhau.
     # Whispering quietly, the worried mother checked on her sleeping baby who had a fever.

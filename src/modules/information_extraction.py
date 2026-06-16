@@ -62,7 +62,6 @@ class InformationExtractor:
             model_name: spaCy model to load (default: en_core_web_sm)
         """
         try:
-            # self.nlp = spacy.load(model_name)
             self.preprocessor = spacy.load(model_name)
             
             # Try to add fastcoref for coreference resolution (optional)
@@ -117,7 +116,9 @@ class InformationExtractor:
             ))
 
         for chunk in doc.noun_chunks:
-            if any(i in seen_token_indices for i in range(chunk.start, chunk.end)):
+            # FIX: Only skip if the core root noun of the chunk is already captured by an NER entity.
+            # This prevents skipping valid noun phrases when an NER entity only covers a prefix modifier or quantifier (e.g., "Three").
+            if chunk.root.i in seen_token_indices:
                 continue
 
             if chunk.root.pos_ == "PRON":
@@ -127,9 +128,6 @@ class InformationExtractor:
             modifiers = self._extract_modifiers(chunk)
             head_noun_lemma = self._get_lemma(chunk.root)
             modifier_summary = self.modifier_extractor.get_modifier_summary(modifiers)
-            
-            # (Tuỳ chọn bổ sung sau này): Bạn có thể loại bỏ các từ hạn định (a, an, the, my...)
-            # ra khỏi text ở đây nếu muốn Knowledge Graph sạch hơn.
             
             entities.append(Entity(
                 text=chunk.text,
@@ -288,7 +286,6 @@ class InformationExtractor:
                     prt = next((c for c in token.children if c.dep_ == "prt"), None)
                     if prt: predicate_parts.append(prt.lemma_.lower())
                     
-                    # Cây cú pháp xuyên thấu
                     subjects = self._get_subjects(token)
                     objects, prep_lemma = self._get_objects(token)
                     
@@ -310,7 +307,6 @@ class InformationExtractor:
                         obj_ent = token_to_entity.get(obj_token.i)
                         
                         if obj_ent:
-                            # Tránh tự refer (Bây giờ so sánh bằng canonical_id là CHUẨN XÁC NHẤT)
                             if subj_ent.canonical_id == obj_ent.canonical_id: continue
                             
                             final_subj = obj_ent.canonical_id if is_passive else subj_ent.canonical_id
@@ -321,7 +317,6 @@ class InformationExtractor:
                                 source_sentence=text, confidence=0.85
                             ))
                             
-                    # Xử lý adverbs (manner)
                     for adv in advmods:
                         relations.append(Relation(
                             subject=subj_ent.canonical_id, predicate=f"{token.lemma_.lower()}_manner",
@@ -334,7 +329,6 @@ class InformationExtractor:
                 subj_ent = token_to_entity.get(head.i)
                 appos_ent = token_to_entity.get(token.i)
                 
-                # So sánh bằng canonical_id để đảm bảo chúng không trỏ về cùng 1 node
                 if subj_ent and appos_ent and subj_ent.canonical_id != appos_ent.canonical_id:
                     relations.append(Relation(
                         subject=subj_ent.canonical_id, predicate="is", obj=appos_ent.canonical_id,
@@ -352,27 +346,24 @@ class InformationExtractor:
         - NOUN thường: lowercase
         """
         if token.pos_ == "PROPN" or token.ent_type_:
-            return token.lemma_          # "Apple", "Google", "Vietnam"
+            return token.lemma_
         else:
-            return token.lemma_.lower()  # "dog", "company", "result"
+            return token.lemma_.lower()
 
     def _get_subjects(self, verb_token) -> List[Any]:
         """Tìm các chủ ngữ của một động từ, xử lý cả liên từ và rút gọn chủ ngữ."""
         subjects = []
         for child in verb_token.children:
             if child.dep_ in ["nsubj", "nsubjpass", "csubj", "csubjpass"]:
-                # TUYỆT CHIÊU: Xuyên thấu đại từ quan hệ
                 if child.lower_ in {"that", "which", "who", "whom"} and verb_token.dep_ == "relcl":
-                    subjects.append(verb_token.head) # Trả về thẳng danh từ gốc
+                    subjects.append(verb_token.head)
                 else:
                     subjects.append(child)
                 
-                # Xử lý liên từ (and/or)
                 for grandchild in child.children:
                     if grandchild.dep_ == "conj":
                         subjects.append(grandchild)
                         
-        # Mượn chủ ngữ nếu tỉnh lược
         if not subjects and verb_token.dep_ == "conj":
             head_verb = verb_token.head
             if head_verb.pos_ == "VERB":
@@ -387,7 +378,6 @@ class InformationExtractor:
         
         for child in verb_token.children:
             if child.dep_ in ["dobj", "attr", "oprd"]:
-                # Tương tự cho tân ngữ (VD: The book that I read)
                 if child.lower_ in {"that", "which", "who", "whom"} and verb_token.dep_ == "relcl":
                     objects.append(verb_token.head)
                 else:
@@ -415,55 +405,21 @@ class InformationExtractor:
         return objects, prep_lemma
     
     def _get_noun_chunk_text(self, token, doc) -> str:
-        """
-        Get the complete noun chunk text for a token.
-        If token is not in a noun chunk, return token text.
-        
-        Args:
-            token: spaCy token
-            doc: spaCy doc
-            
-        Returns:
-            Noun chunk text or token text
-        """
+        """Get the complete noun chunk text for a token."""
         for chunk in doc.noun_chunks:
             if chunk.start <= token.i < chunk.end:
                 return chunk.text
         return token.text
     
     def _extract_head_noun(self, span) -> str:
-        """
-        Extract head noun from a span (entity or noun chunk).
-        The head noun is typically the rightmost noun in an English phrase.
-        
-        Args:
-            span: spaCy Span object
-            
-        Returns:
-            Head noun text
-        """
-        # Find the rightmost noun
+        """Extract head noun from a span (entity or noun chunk)."""
         for token in reversed(list(span)):
             if token.pos_ in ["NOUN", "PROPN"]:
                 return token.text
-        return span.text  # Fallback to full span if no noun found
+        return span.text
     
     def _extract_modifiers(self, span) -> List[Modifier]:
-        """
-        Extract comprehensive modifiers from a span with hierarchical support.
-        
-        Uses ModifierExtractor to detect:
-        - Adjectives, Noun Adjuncts, Possessives, Participles
-        - Quantifiers, Negations, Temporal expressions
-        - Prepositional Phrases, Relative Clauses, Appositives
-        - Hierarchical modifier relationships (e.g., "highly efficient")
-        
-        Args:
-            span: spaCy Span object (noun chunk or entity)
-            
-        Returns:
-            List of Modifier objects with nested hierarchical structure
-        """
+        """Extract comprehensive modifiers from a span with hierarchical support."""
         return self.modifier_extractor.extract_all_modifiers(span, span.root)
 
     def _modifier_to_dict(self, modifier: Modifier) -> Dict[str, Any]:
@@ -486,14 +442,12 @@ class InformationExtractor:
         }
     
     def filter_entities_by_relations(self, entities: List[Entity], relations: List[Relation]) -> List[Entity]:
-        # Lấy tất cả canonical_id xuất hiện trong relation
         related_entity_ids = {
             rel.subject for rel in relations
         } | {
             rel.obj for rel in relations
         }
 
-        # Chỉ giữ entity có canonical_id xuất hiện trong relation
         filtered_entities = [
             entity
             for entity in entities
@@ -503,25 +457,13 @@ class InformationExtractor:
         return filtered_entities
     
     def process_text(self, text: str) -> Dict[str, Any]:
-        """
-        Full information extraction pipeline.
-        
-        Args:
-            text: Input educational text
-            
-        Returns:
-            Dictionary containing extracted entities, relations, and chunks
-        """
-
+        """Full information extraction pipeline."""
         doc = self.preprocess(text)
-
         entities = self.extract_entities(text, doc)
         relations = self.extract_relations(text, entities, doc)
 
-        # entities = self.filter_entities_by_relations(entities, relations)
         return {
             "text": text,
-            # "entities": [self._entity_to_dict(e) for e in filter_entities],
             "entities": [asdict(e) for e in entities],
             "relations": [asdict(r) for r in relations],
         }
