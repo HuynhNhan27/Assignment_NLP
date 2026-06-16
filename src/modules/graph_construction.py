@@ -103,11 +103,12 @@ class GraphConstructor:
         
         return True
 
-    def build_from_pipeline(self, ontology_data: Dict[str, Any], wsd_entities: Optional[List[Dict]] = None) -> None:
+    def build_from_pipeline(self, extraction_data: Dict[str, Any], ontology_data: Dict[str, Any], wsd_entities: Optional[List[Dict]] = None) -> None:
         """
-        Xây dựng Graph trực tiếp từ output của Stage 3 (Ontology) và Stage 2 (WSD).
+        Xây dựng Graph trực tiếp từ output của các stage trong pipeline.
         
         Args:
+            extraction_data: Output từ InformationExtractor
             ontology_data: Output từ OntologyResolver.resolve() 
                            ({"nodes": [...], "relations": [...]})
             wsd_data: Output từ WordSenseDisambiguator.disambiguate()
@@ -153,6 +154,15 @@ class GraphConstructor:
                 relation_type=rel_data["predicate"],
                 properties=properties
             )
+        
+        # 4. Extract and attach Modifiers from extraction_data
+        for entity in extraction_data.get("entities", []):
+            entity_id = entity.get("canonical_id")
+            modifiers = entity.get("modifiers", [])
+            
+            # Only add modifiers if the entity successfully made it into the ontology graph
+            if entity_id and modifiers and entity_id in self.nodes:
+                self.add_modifier_nodes(entity_id, modifiers)
             
     def get_statistics(self) -> Dict[str, Any]:
         """Lấy các chỉ số thống kê của đồ thị."""
@@ -215,32 +225,35 @@ class GraphConstructor:
         else:
             return list(self.graph.neighbors(node_id)) + list(self.graph.predecessors(node_id))
     
-    def add_modifier_nodes(self, entity_id: str, modifiers: List) -> None:
+    def add_modifier_nodes(self, entity_id: str, modifiers: List[Any]) -> None:
         """
-        Add modifier nodes for an entity (Option A: Modifier Nodes).
-        
-        Creates modifier nodes and connects them with appropriate edges.
-        Supports hierarchical modifiers (modifiers of modifiers).
-        
-        Args:
-            entity_id: ID of the entity being modified
-            modifiers: List of Modifier objects (from modifier_extraction module)
+        Add modifier nodes for an entity.
+        Supports hierarchical modifiers (modifiers of modifiers) and handles dict/Enum data safely.
         """
-        from .modifier_extraction import Modifier
-        
+        # Helper function to safely extract data from either dicts or objects 
+        # and handle Enum values (like ModifierType.ADJECTIVE)
+        def get_prop(obj, key, default=None):
+            val = obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+            return val.value if hasattr(val, 'value') else val
+
         for modifier in modifiers:
-            # Create unique modifier node ID
-            mod_label = f"{modifier.type.value}#{modifier.head_token}"
-            mod_node_id = self.add_node(
-                label=modifier.head_token,
-                node_type="modifier",
+            mod_type = get_prop(modifier, "type", "unknown")
+            head_token = get_prop(modifier, "head_token", "unknown")
+            
+            # Create a unique, reproducible node ID for the modifier
+            mod_node_id = f"{entity_id}_mod_{head_token}"
+            
+            self.add_node(
+                node_id=mod_node_id,
+                label=head_token,
+                node_type="MODIFIER",  # Uppercase to match 'ENTITY' conventions
                 properties={
-                    "modifier_type": modifier.type.value,
-                    "text": modifier.text,
-                    "position": modifier.position,
-                    "dependency": modifier.dependency,
-                    "confidence": modifier.confidence,
-                    "constituents": modifier.constituents
+                    "modifier_type": mod_type,
+                    "text": get_prop(modifier, "text", ""),
+                    "position": get_prop(modifier, "position", ""),
+                    "dependency": get_prop(modifier, "dependency", ""),
+                    "confidence": get_prop(modifier, "confidence", 1.0),
+                    "constituents": get_prop(modifier, "constituents", [])
                 }
             )
             
@@ -248,41 +261,43 @@ class GraphConstructor:
             self.add_edge(
                 source_id=mod_node_id,
                 target_id=entity_id,
-                relation_type=f"modifies_{modifier.type.value}",
+                relation_type=f"modifies_{mod_type}",
                 properties={
-                    "position": modifier.position,
-                    "confidence": modifier.confidence
+                    "position": get_prop(modifier, "position", ""),
+                    "confidence": get_prop(modifier, "confidence", 1.0)
                 }
             )
             
             # HIERARCHICAL MODIFIERS: Process nested modifiers recursively
-            if modifier.modifiers:
-                # Add hierarchical modifier nodes
-                for nested_mod in modifier.modifiers:
-                    nested_label = f"{nested_mod.type.value}#{nested_mod.head_token}"
-                    nested_node_id = self.add_node(
-                        label=nested_mod.head_token,
-                        node_type="modifier",
+            nested_modifiers = get_prop(modifier, "modifiers", [])
+            if nested_modifiers:
+                for nested_mod in nested_modifiers:
+                    nested_type = get_prop(nested_mod, "type", "unknown")
+                    nested_head = get_prop(nested_mod, "head_token", "unknown")
+                    nested_node_id = f"{mod_node_id}_nested_{nested_head}"
+                    
+                    self.add_node(
+                        node_id=nested_node_id,
+                        label=nested_head,
+                        node_type="MODIFIER",
                         properties={
-                            "modifier_type": nested_mod.type.value,
-                            "text": nested_mod.text,
-                            "position": nested_mod.position,
-                            "dependency": nested_mod.dependency,
-                            "confidence": nested_mod.confidence,
-                            "constituents": nested_mod.constituents,
+                            "modifier_type": nested_type,
+                            "text": get_prop(nested_mod, "text", ""),
+                            "position": get_prop(nested_mod, "position", ""),
+                            "dependency": get_prop(nested_mod, "dependency", ""),
+                            "confidence": get_prop(nested_mod, "confidence", 1.0),
+                            "constituents": get_prop(nested_mod, "constituents", []),
                             "is_hierarchical": True
                         }
                     )
                     
-                    # Add edge from nested modifier to parent modifier
-                    # e.g., "highly" modifies "efficient"
                     self.add_edge(
                         source_id=nested_node_id,
                         target_id=mod_node_id,
-                        relation_type=f"modifies_{nested_mod.type.value}",
+                        relation_type=f"modifies_{nested_type}",
                         properties={
-                            "position": nested_mod.position,
-                            "confidence": nested_mod.confidence,
+                            "position": get_prop(nested_mod, "position", ""),
+                            "confidence": get_prop(nested_mod, "confidence", 1.0),
                             "hierarchical_level": "nested"
                         }
                     )
