@@ -90,29 +90,26 @@ class OntologyResolver:
         adj_up = defaultdict(set)    # node -> các cha của nó
         adj_down = defaultdict(set)  # node -> các con của nó
         
-        wsd_map = {ent['canonical_id']: ent for ent in wsd_entities.get('disambiguated') if 'canonical_id' in ent}
+        # wsd_map = {ent['canonical_id']: ent for ent in wsd_entities if 'canonical_id' in ent}
         seen_canonical = set()
         entities_ids = set()
         
         # ==========================================
         # BƯỚC 1: XÂY DỰNG ĐỒ THỊ NHÁP (Đầy đủ độ sâu)
         # ==========================================
-        for raw_ent in raw_entities:
-            c_id = raw_ent['canonical_id']
+        for ent in wsd_entities:
+            c_id = ent['canonical_id']
             if c_id in seen_canonical: continue
             seen_canonical.add(c_id)
             entities_ids.add(c_id)
             
             temp_nodes[c_id] = OntologyNode(
-                id=c_id, label=raw_ent['text'], node_type="ENTITY",
-                properties={"confidence": raw_ent.get('confidence', 1.0)}
+                id=c_id, label=ent['original_text'], node_type="ENTITY",
+                properties={"confidence": ent.get('confidence', 1.0)}
             )
-            
-            wsd_data = wsd_map.get(c_id)
-            
-            if wsd_data:
+            if ent['synset_id']:
                 try:
-                    synset = wn.synset(wsd_data['text'])
+                    synset = wn.synset(ent['text'])
                     queue = [(synset, c_id, 0)]
                     visited_synsets = set()
                     
@@ -143,8 +140,8 @@ class OntologyResolver:
                     pass
             else:
                 # OOV Fallback
-                head_noun = raw_ent.get('head_noun', '').lower()
-                text_lower = raw_ent['text'].lower()
+                head_noun = ent.get('text', '').lower()
+                text_lower = ent['original_text'].lower()
                 if head_noun and head_noun != text_lower and head_noun in text_lower:
                     parent_id = self._get_category_id(head_noun)
                     if parent_id not in temp_nodes:
