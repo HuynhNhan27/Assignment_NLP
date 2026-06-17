@@ -2,6 +2,8 @@
 
 A sophisticated NLP pipeline that converts educational texts into a Labeled Property Graph (LPG) with intelligent entity merging through ontology hierarchies.
 
+🌐 **Landing Page:** [Knowledge Graph Extraction Hub](https://huynhnhan27.github.io/Assignment_NLP/) 
+
 ## Features
 
 ### 1. **Information Extraction (IE) Module**
